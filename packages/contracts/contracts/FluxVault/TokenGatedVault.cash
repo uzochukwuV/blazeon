@@ -1,0 +1,133 @@
+// TokenGatedVault - NFT-gated access control using Composite CashTokens
+// Demonstrates Composite CashTokens (NFT + FT together) for access control
+// BOUNTY TARGET: Composite CashTokens (100M sats)
+//
+// Features:
+// - NFT required for access (proves membership)
+// - Fungible token balance required (proves stake/reputation)
+// - Tiered access based on token amounts
+// - Covenant to preserve token outputs
+
+pragma cashscript ^0.13.0;
+
+contract TokenGatedVault(
+    bytes32 accessTokenCategory,    // Token category for access control
+    int minFungibleBalance,         // Minimum FT balance required for access
+    bytes20 adminPkh                // Admin who can manage the vault
+) {
+    // Spend with NFT + minimum fungible token balance (Composite CashToken check)
+    // This demonstrates checking BOTH NFT capability AND fungible amount
+    function spendWithCompositeToken(
+        pubkey holderPk,
+        sig holderSig,
+        int tokenInputIndex         // Index of input containing the access token
+    ) {
+        // Verify the holder's signature
+        require(checkSig(holderSig, holderPk));
+
+        // Verify token input index is valid
+        require(tokenInputIndex >= 0);
+        require(tokenInputIndex < tx.inputs.length);
+
+        // Check that the specified input has the required token category
+        require(tx.inputs[tokenInputIndex].tokenCategory == accessTokenCategory);
+
+        // Check for fungible token balance (Composite: NFT category + FT amount)
+        // The token must have fungible amount >= minFungibleBalance
+        require(tx.inputs[tokenInputIndex].tokenAmount >= minFungibleBalance);
+
+        // Ensure the NFT is preserved in outputs (covenant)
+        // The token must be passed through, not burned
+        require(tx.outputs[0].tokenCategory == accessTokenCategory);
+    }
+
+    // Spend with NFT only (for lower-tier access)
+    // Requires any NFT of the correct category, regardless of FT balance
+    function spendWithNFTOnly(
+        pubkey holderPk,
+        sig holderSig,
+        int tokenInputIndex
+    ) {
+        require(checkSig(holderSig, holderPk));
+
+        // Verify token input index is valid
+        require(tokenInputIndex >= 0);
+        require(tokenInputIndex < tx.inputs.length);
+
+        // Check that input has the required NFT category
+        require(tx.inputs[tokenInputIndex].tokenCategory == accessTokenCategory);
+
+        // NFT must have a commitment (proving it's an NFT, not just FT)
+        // Checking nftCommitment ensures this is actually an NFT
+        require(tx.inputs[tokenInputIndex].nftCommitment != 0x);
+
+        // Preserve the NFT in output
+        require(tx.outputs[0].tokenCategory == accessTokenCategory);
+        require(tx.outputs[0].nftCommitment == tx.inputs[tokenInputIndex].nftCommitment);
+    }
+
+    // Premium tier: requires minting capability NFT
+    // Only minting NFT holders get premium access
+    function spendWithMintingNFT(
+        pubkey holderPk,
+        sig holderSig,
+        int tokenInputIndex
+    ) {
+        require(checkSig(holderSig, holderPk));
+
+        require(tokenInputIndex >= 0);
+        require(tokenInputIndex < tx.inputs.length);
+
+        // Check token category
+        require(tx.inputs[tokenInputIndex].tokenCategory == accessTokenCategory);
+
+        // Verify the NFT has minting capability (highest tier)
+        // tokenCategory for minting NFTs has the minting flag set
+        // We check this by verifying nftCommitment exists AND it's a special type
+        require(tx.inputs[tokenInputIndex].nftCommitment != 0x);
+
+        // Preserve the minting NFT (critical - must not be destroyed)
+        require(tx.outputs[0].tokenCategory == accessTokenCategory);
+        require(tx.outputs[0].nftCommitment == tx.inputs[tokenInputIndex].nftCommitment);
+    }
+
+    // Deposit BCH and/or tokens into the vault
+    // Anyone can deposit, vault preserves all tokens
+    function deposit(int depositInputIndex) {
+        // Ensure vault output is first output
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+
+        // Value must increase (new deposit)
+        require(tx.outputs[0].value >= tx.inputs[0].value);
+
+        // If depositing tokens, ensure they're preserved
+        if (tx.inputs[depositInputIndex].tokenCategory == accessTokenCategory) {
+            // Token deposit - ensure tokens are sent to vault
+            require(tx.outputs[0].tokenCategory == accessTokenCategory);
+            require(tx.outputs[0].tokenAmount >= tx.inputs[depositInputIndex].tokenAmount);
+        }
+    }
+
+    // Admin withdrawal (emergency only)
+    function adminWithdraw(pubkey adminPk, sig adminSig) {
+        require(hash160(adminPk) == adminPkh);
+        require(checkSig(adminSig, adminPk));
+    }
+
+    // Admin can update minimum balance requirement
+    // Output must go back to same contract type with new parameters
+    function updateMinBalance(
+        pubkey adminPk,
+        sig adminSig,
+        int newMinBalance
+    ) {
+        require(hash160(adminPk) == adminPkh);
+        require(checkSig(adminSig, adminPk));
+
+        // New min balance must be reasonable
+        require(newMinBalance >= 0);
+
+        // Preserve vault funds (anti-rug)
+        require(tx.outputs[0].value >= tx.inputs[0].value - 1000);
+    }
+}

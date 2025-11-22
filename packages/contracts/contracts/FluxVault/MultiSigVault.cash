@@ -1,0 +1,158 @@
+// MultiSigVault - Multi-signature vault with BITWISE operations
+// Demonstrates bitwise operations for efficient multi-party authorization
+// Uses bytes for permission flags with & (AND), | (OR), ^ (XOR) operators
+// BOUNTY TARGET: Bitwise Operations (10M sats)
+
+pragma cashscript ^0.13.0;
+
+contract MultiSigVault(
+    bytes20 signer1Pkh,         // First signer's public key hash
+    bytes20 signer2Pkh,         // Second signer's public key hash
+    bytes20 signer3Pkh,         // Third signer's public key hash
+    int minSignatures           // Minimum signatures required (1, 2, or 3)
+) {
+    // Flexible spend with signature selection using bitwise flags
+    // approvalMask: 0x01 = signer1, 0x02 = signer2, 0x04 = signer3
+    function spend(
+        pubkey pk1, sig s1,
+        pubkey pk2, sig s2,
+        pubkey pk3, sig s3,
+        bytes1 approvalMask
+    ) {
+        int sigCount = 0;
+
+        // Check if signer 1 approved (bit 0 set)
+        // Using bitwise AND to check specific bit
+        bytes1 signer1Flag = approvalMask & 0x01;
+        if (signer1Flag == 0x01) {
+            require(hash160(pk1) == signer1Pkh);
+            require(checkSig(s1, pk1));
+            sigCount = sigCount + 1;
+        }
+
+        // Check if signer 2 approved (bit 1 set)
+        bytes1 signer2Flag = approvalMask & 0x02;
+        if (signer2Flag == 0x02) {
+            require(hash160(pk2) == signer2Pkh);
+            require(checkSig(s2, pk2));
+            sigCount = sigCount + 1;
+        }
+
+        // Check if signer 3 approved (bit 2 set)
+        bytes1 signer3Flag = approvalMask & 0x04;
+        if (signer3Flag == 0x04) {
+            require(hash160(pk3) == signer3Pkh);
+            require(checkSig(s3, pk3));
+            sigCount = sigCount + 1;
+        }
+
+        // Verify minimum signatures requirement
+        require(sigCount >= minSignatures);
+    }
+
+    // Two-of-three spend (explicit function for common case)
+    function spendTwoOfThree(
+        pubkey pkA, sig sA,
+        pubkey pkB, sig sB,
+        bytes1 signerMask
+    ) {
+        // signerMask indicates which two signers are participating
+        // 0x03 = signers 1 and 2
+        // 0x05 = signers 1 and 3
+        // 0x06 = signers 2 and 3
+
+        // Validate exactly 2 bits are set using explicit check
+        // Valid masks: 0x03, 0x05, 0x06
+        require(
+            signerMask == 0x03 ||
+            signerMask == 0x05 ||
+            signerMask == 0x06
+        );
+
+        // Check first signer based on mask using bitwise AND
+        if ((signerMask & 0x01) == 0x01) {
+            require(hash160(pkA) == signer1Pkh);
+            require(checkSig(sA, pkA));
+        }
+
+        // Check second signer (either signer2 or signer3 depending on mask)
+        if ((signerMask & 0x02) == 0x02) {
+            // Signer 2 is participating
+            if ((signerMask & 0x01) == 0x01) {
+                // Mask is 0x03: signer1 was pkA, so signer2 is pkB
+                require(hash160(pkB) == signer2Pkh);
+                require(checkSig(sB, pkB));
+            } else {
+                // Mask is 0x06: signer2 is pkA
+                require(hash160(pkA) == signer2Pkh);
+                require(checkSig(sA, pkA));
+            }
+        }
+
+        // Check third signer if participating
+        if ((signerMask & 0x04) == 0x04) {
+            // Signer 3 is pkB (for masks 0x05 and 0x06)
+            require(hash160(pkB) == signer3Pkh);
+            require(checkSig(sB, pkB));
+        }
+    }
+
+    // Emergency recovery requires ALL signatures (bitwise OR check)
+    function emergencyRecovery(
+        pubkey pk1, sig s1,
+        pubkey pk2, sig s2,
+        pubkey pk3, sig s3,
+        bytes1 confirmMask
+    ) {
+        // All three must confirm - use bitwise OR to build expected mask
+        // confirmMask must equal 0x07 (all bits set: 0x01 | 0x02 | 0x04)
+        bytes1 expectedMask = 0x01 | 0x02 | 0x04;
+        require(confirmMask == expectedMask);
+
+        // All three must sign
+        require(hash160(pk1) == signer1Pkh);
+        require(checkSig(s1, pk1));
+
+        require(hash160(pk2) == signer2Pkh);
+        require(checkSig(s2, pk2));
+
+        require(hash160(pk3) == signer3Pkh);
+        require(checkSig(s3, pk3));
+    }
+
+    // Simple spend with signers 1 and 2 (backward compatible)
+    function spendWith1And2(
+        pubkey pk1, sig s1,
+        pubkey pk2, sig s2
+    ) {
+        require(hash160(pk1) == signer1Pkh);
+        require(checkSig(s1, pk1));
+
+        require(hash160(pk2) == signer2Pkh);
+        require(checkSig(s2, pk2));
+    }
+
+    // Simple spend with signers 1 and 3
+    function spendWith1And3(
+        pubkey pk1, sig s1,
+        pubkey pk3, sig s3
+    ) {
+        require(hash160(pk1) == signer1Pkh);
+        require(checkSig(s1, pk1));
+
+        require(hash160(pk3) == signer3Pkh);
+        require(checkSig(s3, pk3));
+    }
+
+    // Simple spend with signers 2 and 3
+    function spendWith2And3(
+        pubkey pk2, sig s2,
+        pubkey pk3, sig s3
+    ) {
+        require(hash160(pk2) == signer2Pkh);
+        require(checkSig(s2, pk2));
+
+        require(hash160(pk3) == signer3Pkh);
+        require(checkSig(s3, pk3));
+    }
+}

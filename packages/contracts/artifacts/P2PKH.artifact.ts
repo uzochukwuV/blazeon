@@ -40,7 +40,7 @@ export default {
   },
   compiler: {
     name: "cashc",
-    version: "0.12.0"
+    version: "0.13.0-next.1"
   },
-  updatedAt: "2025-10-30T08:37:45.960Z"
+  updatedAt: "2025-11-22T15:29:12.992Z"
 } as const;
