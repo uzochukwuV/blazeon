@@ -1,11 +1,30 @@
 import { compileString } from 'cashc';
 import fs from 'fs';
-import { URL } from 'url';
+import path from 'path';
+import { URL, fileURLToPath } from 'url';
 import urlJoin from 'url-join';
 
 interface CompilationCacheItem {
   mtime: number;
 }
+
+// Recursively find all .cash files in a directory
+const findCashFiles = (dir: string, baseDir: string = dir): { relativePath: string; fullPath: string }[] => {
+  const files: { relativePath: string; fullPath: string }[] = [];
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...findCashFiles(fullPath, baseDir));
+    } else if (entry.name.endsWith('.cash')) {
+      const relativePath = path.relative(baseDir, fullPath);
+      files.push({ relativePath, fullPath });
+    }
+  }
+
+  return files;
+};
 
 export const compile = (): void => {
   const cacheDirectory = new URL('../cache', import.meta.url);
@@ -19,18 +38,24 @@ export const compile = (): void => {
   const artifactsDirectory = new URL('../artifacts', import.meta.url);
   fs.mkdirSync(artifactsDirectory, { recursive: true });
 
-  const contractsDirectory = new URL('../contracts', import.meta.url);
-  const result = fs.readdirSync(contractsDirectory)
-    .filter((fn) => fn.endsWith('.cash'))
-    .map((fn) => ({ fn, contents: fs.readFileSync(new URL(urlJoin(contractsDirectory.toString(), fn)), { encoding: 'utf-8' }) }));
+  const contractsDirectory = fileURLToPath(new URL('../contracts', import.meta.url));
+  const cashFiles = findCashFiles(contractsDirectory);
 
-  result.forEach(({ fn, contents }) => {
-    const mtime = fs.statSync(new URL(urlJoin(contractsDirectory.toString(), fn))).mtimeMs;
+  const result = cashFiles.map(({ relativePath, fullPath }) => ({
+    fn: relativePath,
+    fullPath,
+    contents: fs.readFileSync(fullPath, { encoding: 'utf-8' })
+  }));
+
+  result.forEach(({ fn, fullPath, contents }) => {
+    const mtime = fs.statSync(fullPath).mtimeMs;
     if (!compilationCache[fn] || compilationCache[fn].mtime !== mtime) {
       console.log(`Compiling ${fn}...`);
       const artifact = compileString(contents);
 
-      exportArtifact(artifact, new URL(`../artifacts/${fn.replace('.cash', '.artifact.ts')}`, import.meta.url));
+      // Create artifact filename from the contract file name (without subdirectory)
+      const artifactName = path.basename(fn).replace('.cash', '.artifact.ts');
+      exportArtifact(artifact, new URL(`../artifacts/${artifactName}`, import.meta.url));
       compilationCache[fn] = { mtime };
     }
   });

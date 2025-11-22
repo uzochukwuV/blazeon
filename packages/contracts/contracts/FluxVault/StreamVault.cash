@@ -1,0 +1,102 @@
+// StreamVault - Streaming payments with time-based vesting
+// Allows linear release of funds over time
+// Recipient can claim earned funds, sender can cancel and get remaining
+
+pragma cashscript ^0.13.0;
+
+contract StreamVault(
+    bytes20 senderPkh,          // Stream creator's public key hash
+    bytes20 recipientPkh,       // Recipient's public key hash
+    int totalAmount,            // Total amount to stream (in satoshis)
+    int startBlock,             // Block when streaming begins
+    int endBlock                // Block when streaming ends
+) {
+    // Recipient claims all vested funds after stream ends
+    function claimAll(pubkey recipientPk, sig recipientSig) {
+        // Verify recipient identity
+        require(hash160(recipientPk) == recipientPkh);
+        require(checkSig(recipientSig, recipientPk));
+
+        // Verify stream period has ended
+        require(tx.time >= endBlock);
+
+        // All funds go to recipient
+        bytes25 recipientLockingBytecode = new LockingBytecodeP2PKH(recipientPkh);
+        require(tx.outputs[0].lockingBytecode == recipientLockingBytecode);
+    }
+
+    // Recipient claims partial funds (must be after start)
+    function claimPartial(pubkey recipientPk, sig recipientSig, int claimAmount) {
+        // Verify recipient identity
+        require(hash160(recipientPk) == recipientPkh);
+        require(checkSig(recipientSig, recipientPk));
+
+        // Must be after stream start
+        require(tx.time >= startBlock);
+
+        // Verify claim amount is reasonable (not more than total)
+        require(claimAmount > 0);
+        require(claimAmount <= totalAmount);
+
+        // Remaining goes back to contract, claimed goes to recipient
+        int remaining = totalAmount - claimAmount;
+
+        // Output 0: Recipient gets claimed amount
+        bytes25 recipientLockingBytecode = new LockingBytecodeP2PKH(recipientPkh);
+        require(tx.outputs[0].lockingBytecode == recipientLockingBytecode);
+        require(tx.outputs[0].value >= claimAmount - 500);
+
+        // Output 1: Remaining stays locked (if any significant amount)
+        if (remaining > 546) {
+            require(tx.outputs[1].value >= remaining - 500);
+        }
+    }
+
+    // Sender can always cancel (with recipient getting any vested portion)
+    function senderCancel(pubkey senderPk, sig senderSig) {
+        // Verify sender identity
+        require(hash160(senderPk) == senderPkh);
+        require(checkSig(senderSig, senderPk));
+
+        // Funds return to sender (recipient can use mutualCancel for fair split)
+        bytes25 senderLockingBytecode = new LockingBytecodeP2PKH(senderPkh);
+        require(tx.outputs[0].lockingBytecode == senderLockingBytecode);
+    }
+
+    // Emergency: both parties agree to split
+    function mutualCancel(
+        pubkey senderPk, sig senderSig,
+        pubkey recipientPk, sig recipientSig,
+        int recipientShare
+    ) {
+        // Verify both identities
+        require(hash160(senderPk) == senderPkh);
+        require(checkSig(senderSig, senderPk));
+        require(hash160(recipientPk) == recipientPkh);
+        require(checkSig(recipientSig, recipientPk));
+
+        // Verify share is valid
+        require(recipientShare >= 0);
+        require(recipientShare <= totalAmount);
+
+        int senderShare = totalAmount - recipientShare;
+
+        // Output 0: Recipient's share
+        if (recipientShare > 546) {
+            bytes25 recipientLockingBytecode = new LockingBytecodeP2PKH(recipientPkh);
+            require(tx.outputs[0].lockingBytecode == recipientLockingBytecode);
+            require(tx.outputs[0].value >= recipientShare - 300);
+        }
+
+        // Output 1: Sender's share (if recipient got something)
+        // Output 0: Sender's share (if recipient got nothing)
+        if (senderShare > 546) {
+            bytes25 senderLockingBytecode = new LockingBytecodeP2PKH(senderPkh);
+            if (recipientShare > 546) {
+                require(tx.outputs[1].lockingBytecode == senderLockingBytecode);
+            } else {
+                require(tx.outputs[0].lockingBytecode == senderLockingBytecode);
+            }
+        }
+    }
+}

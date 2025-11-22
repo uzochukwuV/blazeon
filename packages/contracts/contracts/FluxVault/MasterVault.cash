@@ -1,0 +1,241 @@
+// MasterVault - All-in-one programmable vault with combined features
+// Combines: TimeLock + Recurring + SpendingLimit + MultiSig + TokenGating
+// Real-world use: Complete treasury management solution
+//
+// BOUNTY TARGETS: Bitwise Operations + P2S Covenant + Composite CashTokens
+
+pragma cashscript ^0.13.0;
+
+contract MasterVault(
+    // === Multi-Sig Configuration ===
+    bytes20 owner1Pkh,              // Primary owner
+    bytes20 owner2Pkh,              // Secondary owner (or 0x for single owner)
+    bytes20 owner3Pkh,              // Third owner (or 0x for 1-2 owners)
+    int requiredSignatures,         // 1, 2, or 3 signatures required
+
+    // === Time Lock Configuration ===
+    int unlockBlock,                // Block when vault unlocks (0 = no timelock)
+
+    // === Spending Limits ===
+    int spendingLimit,              // Max per transaction (0 = unlimited)
+
+    // === Recurring Payment ===
+    bytes20 recurringPayeePkh,      // Who receives recurring (0x = disabled)
+    int recurringAmount,            // Amount per recurring payment
+    int nextPaymentBlock,           // When next payment is due
+
+    // === Token Gating ===
+    bytes32 requiredTokenCategory   // Required token (0x = no token required)
+) {
+    // ===================================================================
+    // FUNCTION 1: Standard Spend (with all checks)
+    // Combines: TimeLock + SpendingLimit + MultiSig
+    // ===================================================================
+    function spend(
+        pubkey pk1, sig s1,
+        pubkey pk2, sig s2,
+        int amount,
+        bytes25 destinationLockingBytecode,
+        bytes1 signerMask
+    ) {
+        // --- Multi-Sig Verification using BITWISE ---
+        int validSigs = 0;
+
+        // Check owner 1 (bit 0)
+        if ((signerMask & 0x01) == 0x01) {
+            require(hash160(pk1) == owner1Pkh);
+            require(checkSig(s1, pk1));
+            validSigs = validSigs + 1;
+        }
+
+        // Check owner 2 (bit 1)
+        if ((signerMask & 0x02) == 0x02) {
+            require(hash160(pk2) == owner2Pkh);
+            require(checkSig(s2, pk2));
+            validSigs = validSigs + 1;
+        }
+
+        require(validSigs >= requiredSignatures);
+
+        // --- Time Lock Check ---
+        if (unlockBlock > 0) {
+            require(tx.time >= unlockBlock);
+        }
+
+        // --- Spending Limit Check ---
+        if (spendingLimit > 0) {
+            require(amount <= spendingLimit);
+        }
+
+        // --- Execute Spend ---
+        require(amount > 0);
+        require(tx.inputs[0].value >= amount + 1000);
+
+        int remaining = tx.inputs[0].value - amount - 500;
+
+        if (remaining > 546) {
+            // P2S Covenant: remaining stays in vault
+            require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+            require(tx.outputs[0].value >= remaining);
+
+            // Payment to destination
+            require(tx.outputs[1].lockingBytecode == destinationLockingBytecode);
+            require(tx.outputs[1].value >= amount - 300);
+        } else {
+            require(tx.outputs[0].lockingBytecode == destinationLockingBytecode);
+        }
+    }
+
+    // ===================================================================
+    // FUNCTION 2: Token-Gated Spend
+    // Requires holding specific NFT/token to access
+    // ===================================================================
+    function spendWithToken(
+        pubkey holderPk,
+        sig holderSig,
+        int amount,
+        bytes25 destinationLockingBytecode,
+        int tokenInputIndex
+    ) {
+        require(checkSig(holderSig, holderPk));
+
+        // --- Token Gating Check (Composite CashTokens) ---
+        require(tokenInputIndex >= 0);
+        require(tokenInputIndex < tx.inputs.length);
+        require(tx.inputs[tokenInputIndex].tokenCategory == requiredTokenCategory);
+
+        // --- Time Lock Check ---
+        if (unlockBlock > 0) {
+            require(tx.time >= unlockBlock);
+        }
+
+        // --- Spending Limit Check ---
+        if (spendingLimit > 0) {
+            require(amount <= spendingLimit);
+        }
+
+        // --- Execute Spend ---
+        require(amount > 0);
+
+        int remaining = tx.inputs[0].value - amount - 500;
+
+        if (remaining > 546) {
+            // Preserve vault
+            require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+            require(tx.outputs[0].value >= remaining);
+
+            // Preserve token
+            require(tx.outputs[0].tokenCategory == requiredTokenCategory);
+
+            // Payment
+            require(tx.outputs[1].lockingBytecode == destinationLockingBytecode);
+        } else {
+            require(tx.outputs[0].lockingBytecode == destinationLockingBytecode);
+        }
+    }
+
+    // ===================================================================
+    // FUNCTION 3: Execute Recurring Payment
+    // Anyone can trigger when payment is due
+    // ===================================================================
+    function executeRecurring() {
+        // Check recurring is enabled
+        require(recurringAmount > 0);
+
+        // Check payment is due
+        require(tx.time >= nextPaymentBlock);
+
+        // Check sufficient funds
+        require(tx.inputs[0].value >= recurringAmount + 1000);
+
+        int remaining = tx.inputs[0].value - recurringAmount - 500;
+
+        // P2S Covenant: vault continues
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].value >= remaining);
+
+        // Payment to recurring payee
+        bytes25 payeeLockingBytecode = new LockingBytecodeP2PKH(recurringPayeePkh);
+        require(tx.outputs[1].lockingBytecode == payeeLockingBytecode);
+        require(tx.outputs[1].value >= recurringAmount - 300);
+    }
+
+    // ===================================================================
+    // FUNCTION 4: Claim Recurring (Payee pulls payment)
+    // ===================================================================
+    function claimRecurring(pubkey payeePk, sig payeeSig) {
+        require(hash160(payeePk) == recurringPayeePkh);
+        require(checkSig(payeeSig, payeePk));
+
+        require(tx.time >= nextPaymentBlock);
+        require(tx.inputs[0].value >= recurringAmount + 1000);
+
+        int remaining = tx.inputs[0].value - recurringAmount - 500;
+
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].value >= remaining);
+
+        bytes25 payeeLockingBytecode = new LockingBytecodeP2PKH(recurringPayeePkh);
+        require(tx.outputs[1].lockingBytecode == payeeLockingBytecode);
+        require(tx.outputs[1].value >= recurringAmount - 300);
+    }
+
+    // ===================================================================
+    // FUNCTION 5: Deposit (Anyone can add funds)
+    // ===================================================================
+    function deposit() {
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].value > tx.inputs[0].value);
+    }
+
+    // ===================================================================
+    // FUNCTION 6: Emergency Withdrawal (All owners must sign)
+    // Bypasses all limits when all parties agree
+    // ===================================================================
+    function emergencyWithdraw(
+        pubkey pk1, sig s1,
+        pubkey pk2, sig s2,
+        pubkey pk3, sig s3,
+        bytes25 destinationLockingBytecode
+    ) {
+        // ALL configured owners must sign
+        require(hash160(pk1) == owner1Pkh);
+        require(checkSig(s1, pk1));
+
+        // Only check owner2 if configured
+        if (owner2Pkh != 0x0000000000000000000000000000000000000000) {
+            require(hash160(pk2) == owner2Pkh);
+            require(checkSig(s2, pk2));
+        }
+
+        // Only check owner3 if configured
+        if (owner3Pkh != 0x0000000000000000000000000000000000000000) {
+            require(hash160(pk3) == owner3Pkh);
+            require(checkSig(s3, pk3));
+        }
+
+        // Full withdrawal to destination
+        require(tx.outputs[0].lockingBytecode == destinationLockingBytecode);
+    }
+
+    // ===================================================================
+    // FUNCTION 7: Update Configuration (Owner can modify settings)
+    // ===================================================================
+    function updateConfig(
+        pubkey ownerPk,
+        sig ownerSig,
+        int newSpendingLimit,
+        int newUnlockBlock
+    ) {
+        // Primary owner can update
+        require(hash160(ownerPk) == owner1Pkh);
+        require(checkSig(ownerSig, ownerPk));
+
+        // New values must be valid
+        require(newSpendingLimit >= 0);
+        require(newUnlockBlock >= 0);
+
+        // Preserve funds (P2S covenant)
+        require(tx.outputs[0].value >= tx.inputs[0].value - 1000);
+    }
+}

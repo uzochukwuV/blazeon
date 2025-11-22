@@ -30,7 +30,7 @@
     "@bch-wc2/mainnet-js-signer": "^0.0.15"
   },
   "peerDependencies": {
-    "cashscript": "^0.12.0",
+    "cashscript": "0.13.0-next.1",
     "mainnet-js": "^2.7.24"
   },
   "optionalDependencies": {},
@@ -38,8 +38,8 @@
     "@bch-wc2/privkey-connector": "^0.0.15",
     "@jest/globals": "^29.7.0",
     "@types/jest": "^29.5.14",
-    "cashc": "^0.12.0",
-    "cashscript": "^0.12.0",
+    "cashc": "0.13.0-next.1",
+    "cashscript": "0.13.0-next.1",
     "jest": "^29.7.0",
     "mainnet-js": "^2.7.24",
     "tsx": "^4.19.2",
