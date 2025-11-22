@@ -30,7 +30,37 @@ Advanced smart contract suite for Bitcoin Cash demonstrating the power of CashSc
 
 ---
 
-## Contracts (7 Total)
+## Contracts (8 Total)
+
+### MasterVault *(FLAGSHIP)*
+**All-in-one programmable vault with dynamic feature selection.**
+
+Combines ALL bounty targets in one contract: Bitwise Operations + P2S Covenant + Composite CashTokens
+
+**Real-World Use:** Complete treasury management, customizable vaults for any use case
+
+**Dynamic Features (enable/disable via constructor):**
+
+| Feature | Parameter | Disabled Value |
+|---------|-----------|----------------|
+| Multi-Sig | `owner2Pkh`, `owner3Pkh` | `0x00...` (20 bytes) |
+| Time Lock | `unlockBlock` | `0` |
+| Spending Limit | `spendingLimit` | `0` |
+| Recurring Payment | `recurringAmount` | `0` |
+| Token Gating | `requiredTokenCategory` | `0x00...` (32 bytes) |
+
+**Functions:**
+- `spend()` - Standard spend with multi-sig + timelock + spending limit
+- `spendWithToken()` - Token-gated access
+- `executeRecurring()` - Anyone can trigger due payments
+- `claimRecurring()` - Payee claims their payment
+- `deposit()` - Anyone can add funds
+- `emergencyWithdraw()` - All owners must sign
+- `updateConfig()` - Primary owner updates settings
+
+**Bounty:** Bitwise + P2S Covenant + Composite CashTokens (ALL THREE!)
+
+---
 
 ### TimeLockVault
 Time-locked vault with P2S covenant support for gradual fund release.
@@ -167,6 +197,7 @@ yarn dev
 packages/contracts/
 ├── contracts/
 │   └── FluxVault/
+│       ├── MasterVault.cash          # ALL BOUNTIES - Flagship contract
 │       ├── TimeLockVault.cash        # P2S Covenant bounty
 │       ├── StreamVault.cash          # Streaming payments
 │       ├── MultiSigVault.cash        # Bitwise bounty
@@ -212,11 +243,37 @@ require(tx.outputs[0].nftCommitment == tx.inputs[tokenInputIndex].nftCommitment)
 
 FluxVault isn't just a hackathon project—it's a practical toolkit for real BCH applications:
 
-1. **Treasury Management**: MultiSigVault + WhitelistVault for secure organizational funds
-2. **Payroll Automation**: RecurringPaymentVault for automated salary distribution
-3. **Budget Control**: SpendingLimitVault for expense management
-4. **Membership Systems**: TokenGatedVault for NFT-gated communities
-5. **Savings Products**: TimeLockVault for term deposits and vesting
+1. **Complete Solution**: MasterVault combines ALL features with dynamic enable/disable
+2. **Treasury Management**: MultiSigVault + WhitelistVault for secure organizational funds
+3. **Payroll Automation**: RecurringPaymentVault for automated salary distribution
+4. **Budget Control**: SpendingLimitVault for expense management
+5. **Membership Systems**: TokenGatedVault for NFT-gated communities
+6. **Savings Products**: TimeLockVault for term deposits and vesting
+
+### MasterVault Example Configurations
+
+**Simple Savings Vault:**
+```
+unlockBlock: 800000      # Lock until block 800000
+spendingLimit: 0         # No limit after unlock
+owner2Pkh: 0x00...       # Single owner
+```
+
+**Corporate Treasury:**
+```
+owner1Pkh: <CEO>
+owner2Pkh: <CFO>
+owner3Pkh: <Board>
+requiredSignatures: 2    # 2-of-3 approval
+spendingLimit: 10000000  # 0.1 BCH max per tx
+```
+
+**DAO Vault:**
+```
+requiredTokenCategory: <governance_nft>
+requiredSignatures: 2
+recurringAmount: 1000000 # Monthly contributor payments
+```
 
 ## License
 
