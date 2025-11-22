@@ -1,0 +1,61 @@
+// WhitelistVault - Vault with approved recipient whitelist
+// Real-world use: Corporate treasury, family accounts, trust distributions
+// Only pre-approved addresses can receive funds
+
+pragma cashscript ^0.13.0;
+
+contract WhitelistVault(
+    bytes20 ownerPkh,           // Owner who can spend
+    bytes20 adminPkh,           // Admin who manages whitelist
+    bytes20 whitelistHash       // Hash of approved addresses (Merkle root or simple hash)
+) {
+    // Spend to a whitelisted address
+    function spendToWhitelisted(
+        pubkey ownerPk,
+        sig ownerSig,
+        bytes20 recipientPkh,
+        int amount
+    ) {
+        // Verify owner
+        require(hash160(ownerPk) == ownerPkh);
+        require(checkSig(ownerSig, ownerPk));
+
+        // Verify recipient is whitelisted
+        // Simple check: recipient hash must match one of the whitelisted
+        // In production, this could use a Merkle proof
+        require(hash160(recipientPkh) == whitelistHash);
+
+        // Verify amount
+        require(amount > 0);
+        require(amount <= tx.inputs[0].value);
+
+        int remaining = tx.inputs[0].value - amount - 500;
+
+        // Create outputs
+        if (remaining > 546) {
+            // Output 0: Remaining in vault
+            require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+            require(tx.outputs[0].value >= remaining);
+
+            // Output 1: Payment to whitelisted recipient
+            bytes25 recipientLockingBytecode = new LockingBytecodeP2PKH(recipientPkh);
+            require(tx.outputs[1].lockingBytecode == recipientLockingBytecode);
+        } else {
+            // Final spend
+            bytes25 recipientLockingBytecode = new LockingBytecodeP2PKH(recipientPkh);
+            require(tx.outputs[0].lockingBytecode == recipientLockingBytecode);
+        }
+    }
+
+    // Admin withdrawal (emergency)
+    function adminWithdraw(pubkey adminPk, sig adminSig) {
+        require(hash160(adminPk) == adminPkh);
+        require(checkSig(adminSig, adminPk));
+    }
+
+    // Deposit funds
+    function deposit() {
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].value > tx.inputs[0].value);
+    }
+}

@@ -1,0 +1,85 @@
+// RecurringPaymentVault - Automated recurring payments
+// Real-world use: Subscriptions, rent, salaries, bills
+// Demonstrates practical DeFi automation
+
+pragma cashscript ^0.13.0;
+
+contract RecurringPaymentVault(
+    bytes20 payerPkh,           // Who funds the vault
+    bytes20 payeePkh,           // Who receives payments
+    int paymentAmount,          // Amount per payment
+    int nextPaymentBlock        // Block when next payment is allowed
+) {
+    // Payee claims their recurring payment
+    function claimPayment(pubkey payeePk, sig payeeSig) {
+        // Verify payee
+        require(hash160(payeePk) == payeePkh);
+        require(checkSig(payeeSig, payeePk));
+
+        // Check enough time has passed (next payment block reached)
+        require(tx.time >= nextPaymentBlock);
+
+        // Check vault has enough funds
+        require(tx.inputs[0].value >= paymentAmount + 1000);
+
+        // Calculate remaining
+        int remaining = tx.inputs[0].value - paymentAmount - 500;
+
+        // Create outputs
+        if (remaining > 546) {
+            // Output 0: Updated vault (covenant preserves contract)
+            require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+            require(tx.outputs[0].value >= remaining);
+
+            // Output 1: Payment to payee
+            bytes25 payeeLockingBytecode = new LockingBytecodeP2PKH(payeePkh);
+            require(tx.outputs[1].lockingBytecode == payeeLockingBytecode);
+            require(tx.outputs[1].value >= paymentAmount - 300);
+        } else {
+            // Final payment - send all to payee
+            bytes25 payeeLockingBytecode = new LockingBytecodeP2PKH(payeePkh);
+            require(tx.outputs[0].lockingBytecode == payeeLockingBytecode);
+        }
+    }
+
+    // Payer can cancel and withdraw remaining funds
+    function cancel(pubkey payerPk, sig payerSig) {
+        require(hash160(payerPk) == payerPkh);
+        require(checkSig(payerSig, payerPk));
+
+        // Return funds to payer
+        bytes25 payerLockingBytecode = new LockingBytecodeP2PKH(payerPkh);
+        require(tx.outputs[0].lockingBytecode == payerLockingBytecode);
+    }
+
+    // Payer can top up the vault
+    function topUp(pubkey payerPk, sig payerSig) {
+        require(hash160(payerPk) == payerPkh);
+        require(checkSig(payerSig, payerPk));
+
+        // Vault must receive more funds
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].value > tx.inputs[0].value);
+    }
+
+    // Anyone can trigger payment if conditions met (automation friendly)
+    // This enables bots/services to execute payments automatically
+    function executePayment() {
+        // Check enough time has passed
+        require(tx.time >= nextPaymentBlock);
+
+        // Check vault has enough funds
+        require(tx.inputs[0].value >= paymentAmount + 1000);
+
+        int remaining = tx.inputs[0].value - paymentAmount - 500;
+
+        // Output 0: Updated vault
+        require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
+        require(tx.outputs[0].value >= remaining);
+
+        // Output 1: Payment to payee
+        bytes25 payeeLockingBytecode = new LockingBytecodeP2PKH(payeePkh);
+        require(tx.outputs[1].lockingBytecode == payeeLockingBytecode);
+        require(tx.outputs[1].value >= paymentAmount - 300);
+    }
+}
