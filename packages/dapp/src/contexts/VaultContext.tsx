@@ -1,20 +1,23 @@
 'use client';
 
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { useWeb3ModalConnectorContext } from '@bch-wc2/web3modal-connector';
-import { Contract, ElectrumNetworkProvider, NetworkProvider } from 'cashscript';
-import { Wallet, UtxoI } from 'mainnet-js';
-import { hexToBin, binToHex, cashAddressToLockingBytecode, lockingBytecodeToCashAddress } from '@bitauth/libauth';
+import { ElectrumNetworkProvider, NetworkProvider, Contract } from 'cashscript';
+import { Wallet } from 'mainnet-js';
+import { hexToBin, cashAddressToLockingBytecode } from '@bitauth/libauth';
+import { WalletType, WalletBalance } from '../types/wallet';
+import { MainnetConnector } from '../services/wallets/mainnet-connector';
 
-// Import contract artifacts
-import MasterVaultArtifact from '../../../contracts/artifacts/MasterVault.artifact';
-import TimeLockVaultArtifact from '../../../contracts/artifacts/TimeLockVault.artifact';
-import MultiSigVaultArtifact from '../../../contracts/artifacts/MultiSigVault.artifact';
-import SpendingLimitVaultArtifact from '../../../contracts/artifacts/SpendingLimitVault.artifact';
-import RecurringPaymentVaultArtifact from '../../../contracts/artifacts/RecurringPaymentVault.artifact';
-import StreamVaultArtifact from '../../../contracts/artifacts/StreamVault.artifact';
-import WhitelistVaultArtifact from '../../../contracts/artifacts/WhitelistVault.artifact';
-import TokenGatedVaultArtifact from '../../../contracts/artifacts/TokenGatedVault.artifact';
+// Import all artifacts from contracts package
+import {
+  MasterVaultArtifact,
+  TimeLockVaultArtifact,
+  MultiSigVaultArtifact,
+  SpendingLimitVaultArtifact,
+  RecurringPaymentVaultArtifact,
+  StreamVaultArtifact,
+  WhitelistVaultArtifact,
+  TokenGatedVaultArtifact,
+} from '@dapp-starter/contracts';
 
 // Types
 export type VaultType =
@@ -29,33 +32,19 @@ export type VaultType =
 
 export type NetworkType = 'chipnet' | 'mainnet';
 
-export interface VaultFeature {
-  id: string;
-  name: string;
-  enabled: boolean;
-  config?: Record<string, unknown>;
-}
-
 export interface VaultConfig {
-  // Multi-sig
   owners?: string[];
   requiredSignatures?: number;
-  // Time lock
   unlockBlock?: number;
-  // Spending limit
   dailyLimit?: number;
-  // Recurring payment
   payeeAddress?: string;
   paymentAmount?: number;
   paymentInterval?: number;
-  // Token gating
   requiredTokenCategory?: string;
-  // Stream
   recipientAddress?: string;
   streamAmount?: number;
   startBlock?: number;
   endBlock?: number;
-  // Whitelist
   whitelistedAddresses?: string[];
 }
 
@@ -68,7 +57,7 @@ export interface Vault {
   features: string[];
   config: VaultConfig;
   createdAt: number;
-  contract?: any; // Contract instance - using any to avoid type complexity
+  contract?: any;
 }
 
 export interface Proposal {
@@ -96,12 +85,16 @@ export interface ProposalMessage {
 }
 
 interface VaultContextType {
-  // Connection state
+  // Wallet state
   isConnected: boolean;
   address: string | null;
+  publicKey: string | null;
+  publicKeyHash: Uint8Array | null;
   balance: number;
+  walletBalance: WalletBalance | null;
   network: NetworkType;
   provider: NetworkProvider | null;
+  connector: MainnetConnector | null;
 
   // Vault state
   vaults: Vault[];
@@ -110,10 +103,11 @@ interface VaultContextType {
   loading: boolean;
   error: string | null;
 
-  // Actions
+  // Wallet actions
   setNetwork: (network: NetworkType) => void;
-  connectWallet: () => Promise<void>;
+  connectWallet: (walletType?: WalletType, seedPhrase?: string) => Promise<void>;
   disconnectWallet: () => Promise<void>;
+  refreshWalletBalance: () => Promise<void>;
 
   // Vault operations
   createVault: (type: VaultType, name: string, config: VaultConfig, initialDeposit: bigint) => Promise<string>;
@@ -138,45 +132,33 @@ function getPkhFromAddress(address: string): Uint8Array {
   if (typeof result === 'string') {
     throw new Error(`Invalid address: ${result}`);
   }
-  // P2PKH locking bytecode format: OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG
-  // The PKH is bytes 3-23 (20 bytes)
   return result.bytecode.slice(3, 23);
 }
 
-// Helper to create P2PKH locking bytecode
-function createP2PKHLockingBytecode(pkh: Uint8Array): Uint8Array {
-  // OP_DUP OP_HASH160 <20 bytes PKH> OP_EQUALVERIFY OP_CHECKSIG
-  const prefix = new Uint8Array([0x76, 0xa9, 0x14]);
-  const suffix = new Uint8Array([0x88, 0xac]);
-  const result = new Uint8Array(25);
-  result.set(prefix, 0);
-  result.set(pkh, 3);
-  result.set(suffix, 23);
-  return result;
-}
-
-// Storage key for vaults
 const VAULTS_STORAGE_KEY = 'fluxvault_vaults';
 const PROPOSALS_STORAGE_KEY = 'fluxvault_proposals';
 
 export function VaultProvider({ children }: { children: React.ReactNode }) {
-  const { address, connect, disconnect, isConnected, connector } = useWeb3ModalConnectorContext();
-
+  // Wallet state
   const [network, setNetworkState] = useState<NetworkType>('chipnet');
   const [provider, setProvider] = useState<NetworkProvider | null>(null);
+  const [connector, setConnector] = useState<MainnetConnector | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [address, setAddress] = useState<string | null>(null);
+  const [publicKey, setPublicKey] = useState<string | null>(null);
+  const [publicKeyHash, setPublicKeyHash] = useState<Uint8Array | null>(null);
   const [balance, setBalance] = useState<number>(0);
+  const [walletBalance, setWalletBalance] = useState<WalletBalance | null>(null);
+
+  // Vault state
   const [vaults, setVaults] = useState<Vault[]>([]);
   const [selectedVault, setSelectedVault] = useState<Vault | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Initialize provider based on network
+  // Initialize provider
   useEffect(() => {
-    const electrumServer = network === 'chipnet'
-      ? 'wss://chipnet.bch.ninja:50004'
-      : 'wss://bch.imaginary.cash:50004';
-
     const newProvider = new ElectrumNetworkProvider(network);
     setProvider(newProvider);
   }, [network]);
@@ -188,7 +170,6 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
-          // Convert balance strings back to bigint
           const vaultsWithBigInt = parsed.map((v: Vault & { balance: string }) => ({
             ...v,
             balance: BigInt(v.balance || '0')
@@ -213,7 +194,6 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   // Save vaults to localStorage
   useEffect(() => {
     if (typeof window !== 'undefined' && vaults.length > 0) {
-      // Convert bigint to string for JSON serialization
       const vaultsForStorage = vaults.map(v => ({
         ...v,
         balance: v.balance.toString(),
@@ -230,64 +210,181 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     }
   }, [proposals]);
 
-  // Watch balance
+  // Auto-reconnect wallet
   useEffect(() => {
-    if (!address) {
-      setBalance(0);
-      return;
+    const savedWalletType = localStorage.getItem('wallet_type');
+    if (savedWalletType) {
+      connectWallet(savedWalletType as WalletType);
     }
-
-    let cancelWatch: (() => void) | undefined;
-
-    (async () => {
-      try {
-        const wallet = await Wallet.watchOnly(address);
-        const utxos = await wallet.getUtxos();
-        const total = utxos.reduce((acc: number, utxo: UtxoI) => acc + (utxo.token ? 0 : utxo.satoshis), 0);
-        setBalance(total);
-
-        cancelWatch = await wallet.provider.subscribeToAddress(address, async () => {
-          const newUtxos = await wallet.getUtxos();
-          const newTotal = newUtxos.reduce((acc: number, utxo: UtxoI) => acc + (utxo.token ? 0 : utxo.satoshis), 0);
-          setBalance(newTotal);
-        });
-      } catch (e) {
-        console.error('Failed to watch address:', e);
-      }
-    })();
-
-    return () => {
-      cancelWatch?.();
-    };
-  }, [address]);
+  }, []);
 
   const setNetwork = useCallback((newNetwork: NetworkType) => {
     setNetworkState(newNetwork);
-  }, []);
+    // Update connector network if connected
+    if (connector) {
+      const newConnector = new MainnetConnector(newNetwork);
+      setConnector(newConnector);
+    }
+  }, [connector]);
 
-  const connectWallet = useCallback(async () => {
-    if (!connect) return;
+  const connectWallet = useCallback(async (walletType: WalletType = WalletType.MAINNET, seedPhrase?: string) => {
     setLoading(true);
     setError(null);
+
     try {
-      await connect();
+      const newConnector = new MainnetConnector(network);
+      const walletInfo = await newConnector.connect(seedPhrase);
+
+      setConnector(newConnector);
+      setAddress(walletInfo.address);
+      setPublicKey(walletInfo.publicKey || null);
+      setWalletBalance(walletInfo.balance || null);
+      setBalance(walletInfo.balance?.sat || 0);
+      setIsConnected(true);
+
+      // Get public key hash
+      try {
+        const pkh = await newConnector.getPublicKeyHash();
+        setPublicKeyHash(pkh);
+      } catch (e) {
+        console.warn('Could not get public key hash:', e);
+      }
+
+      localStorage.setItem('wallet_type', walletType);
     } catch (e) {
-      setError('Failed to connect wallet');
+      setError(e instanceof Error ? e.message : 'Failed to connect wallet');
       console.error(e);
     }
     setLoading(false);
-  }, [connect]);
+  }, [network]);
 
   const disconnectWallet = useCallback(async () => {
-    if (!disconnect) return;
-    setLoading(true);
-    try {
-      await disconnect();
-    } catch (e) {
-      console.error(e);
+    if (connector) {
+      await connector.disconnect();
     }
-    setLoading(false);
-  }, [disconnect]);
+    setConnector(null);
+    setAddress(null);
+    setPublicKey(null);
+    setPublicKeyHash(null);
+    setBalance(0);
+    setWalletBalance(null);
+    setIsConnected(false);
+    localStorage.removeItem('wallet_type');
+  }, [connector]);
+
+  const refreshWalletBalance = useCallback(async () => {
+    if (!connector) return;
+    try {
+      const newBalance = await connector.getBalance();
+      setWalletBalance(newBalance);
+      setBalance(newBalance.sat);
+    } catch (e) {
+      console.error('Failed to refresh balance:', e);
+    }
+  }, [connector]);
+
+  // Reconstruct contract from vault config
+  function reconstructContract(vault: Vault, prov: NetworkProvider): any {
+    const config = vault.config;
+    const zeroPkh = new Uint8Array(20);
+    const zeroCategory = new Uint8Array(32);
+
+    switch (vault.type) {
+      case 'MasterVault': {
+        const owner1Pkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : zeroPkh;
+        const owner2Pkh = config.owners?.[1] ? getPkhFromAddress(config.owners[1]) : zeroPkh;
+        const owner3Pkh = config.owners?.[2] ? getPkhFromAddress(config.owners[2]) : zeroPkh;
+        const recurringPayeePkh = config.payeeAddress ? getPkhFromAddress(config.payeeAddress) : zeroPkh;
+
+        return new Contract(
+          MasterVaultArtifact,
+          [owner1Pkh, owner2Pkh, owner3Pkh, BigInt(config.requiredSignatures || 1),
+           BigInt(config.unlockBlock || 0), BigInt(config.dailyLimit || 0),
+           recurringPayeePkh, BigInt(config.paymentAmount || 0),
+           BigInt(config.paymentInterval || 0),
+           config.requiredTokenCategory ? hexToBin(config.requiredTokenCategory) : zeroCategory],
+          { provider: prov, addressType: 'p2sh32' }
+        );
+      }
+
+      case 'TimeLockVault': {
+        const ownerPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : zeroPkh;
+        const recoveryPkh = config.owners?.[1] ? getPkhFromAddress(config.owners[1]) : zeroPkh;
+        return new Contract(
+          TimeLockVaultArtifact,
+          [ownerPkh, recoveryPkh, BigInt(config.unlockBlock || 0), 0n],
+          { provider: prov, addressType: 'p2sh32' }
+        );
+      }
+
+      case 'MultiSigVault': {
+        const signer1Pkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : zeroPkh;
+        const signer2Pkh = config.owners?.[1] ? getPkhFromAddress(config.owners[1]) : zeroPkh;
+        const signer3Pkh = config.owners?.[2] ? getPkhFromAddress(config.owners[2]) : zeroPkh;
+        return new Contract(
+          MultiSigVaultArtifact,
+          [signer1Pkh, signer2Pkh, signer3Pkh, BigInt(config.requiredSignatures || 2)],
+          { provider: prov, addressType: 'p2sh32' }
+        );
+      }
+
+      case 'SpendingLimitVault': {
+        const ownerPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : zeroPkh;
+        const adminPkh = config.owners?.[1] ? getPkhFromAddress(config.owners[1]) : ownerPkh;
+        return new Contract(
+          SpendingLimitVaultArtifact,
+          [ownerPkh, adminPkh, BigInt(config.dailyLimit || 100000), 0n, 0n],
+          { provider: prov, addressType: 'p2sh32' }
+        );
+      }
+
+      case 'RecurringPaymentVault': {
+        const payerPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : zeroPkh;
+        const payeePkh = config.payeeAddress ? getPkhFromAddress(config.payeeAddress) : zeroPkh;
+        return new Contract(
+          RecurringPaymentVaultArtifact,
+          [payerPkh, payeePkh, BigInt(config.paymentAmount || 0), BigInt(config.paymentInterval || 0)],
+          { provider: prov, addressType: 'p2sh32' }
+        );
+      }
+
+      case 'StreamVault': {
+        const senderPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : zeroPkh;
+        const recipientPkh = config.recipientAddress ? getPkhFromAddress(config.recipientAddress) : zeroPkh;
+        return new Contract(
+          StreamVaultArtifact,
+          [senderPkh, recipientPkh, BigInt(config.streamAmount || 0),
+           BigInt(config.startBlock || 0), BigInt(config.endBlock || 0)],
+          { provider: prov, addressType: 'p2sh32' }
+        );
+      }
+
+      case 'WhitelistVault': {
+        const ownerPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : zeroPkh;
+        const adminPkh = config.owners?.[1] ? getPkhFromAddress(config.owners[1]) : ownerPkh;
+        // whitelistHash is a hash of all whitelisted addresses combined
+        const whitelistPkh = config.whitelistedAddresses?.[0] ? getPkhFromAddress(config.whitelistedAddresses[0]) : zeroPkh;
+        return new Contract(
+          WhitelistVaultArtifact,
+          [ownerPkh, adminPkh, whitelistPkh],
+          { provider: prov, addressType: 'p2sh32' }
+        );
+      }
+
+      case 'TokenGatedVault': {
+        const adminPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : zeroPkh;
+        return new Contract(
+          TokenGatedVaultArtifact,
+          [config.requiredTokenCategory ? hexToBin(config.requiredTokenCategory) : zeroCategory,
+           0n, adminPkh],
+          { provider: prov, addressType: 'p2sh32' }
+        );
+      }
+
+      default:
+        throw new Error(`Unknown vault type: ${vault.type}`);
+    }
+  }
 
   const refreshVaults = useCallback(async () => {
     if (!provider) return;
@@ -299,8 +396,8 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
           try {
             const contract = reconstructContract(vault, provider);
             const utxos = await contract.getUtxos();
-            const balance = utxos.reduce((sum, utxo) => sum + utxo.satoshis, 0n);
-            return { ...vault, balance, contract };
+            const vaultBalance = utxos.reduce((sum: bigint, utxo: { satoshis: bigint }) => sum + utxo.satoshis, 0n);
+            return { ...vault, balance: vaultBalance, contract };
           } catch (e) {
             console.error(`Failed to refresh vault ${vault.id}:`, e);
             return vault;
@@ -314,159 +411,13 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     setLoading(false);
   }, [provider, vaults]);
 
-  // Reconstruct contract from vault config
-  function reconstructContract(vault: Vault, provider: NetworkProvider): Contract<any> {
-    const config = vault.config;
-
-    switch (vault.type) {
-      case 'MasterVault': {
-        const owner1Pkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : new Uint8Array(20);
-        const owner2Pkh = config.owners?.[1] ? getPkhFromAddress(config.owners[1]) : new Uint8Array(20);
-        const owner3Pkh = config.owners?.[2] ? getPkhFromAddress(config.owners[2]) : new Uint8Array(20);
-        const recurringPayeePkh = config.payeeAddress ? getPkhFromAddress(config.payeeAddress) : new Uint8Array(20);
-
-        return new Contract(
-          MasterVaultArtifact,
-          [
-            owner1Pkh,
-            owner2Pkh,
-            owner3Pkh,
-            BigInt(config.requiredSignatures || 1),
-            BigInt(config.unlockBlock || 0),
-            BigInt(config.dailyLimit || 0),
-            recurringPayeePkh,
-            BigInt(config.paymentAmount || 0),
-            BigInt(config.paymentInterval || 0),
-            config.requiredTokenCategory ? hexToBin(config.requiredTokenCategory) : new Uint8Array(32)
-          ],
-          { provider, addressType: 'p2sh32' }
-        );
-      }
-
-      case 'TimeLockVault': {
-        const ownerPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : new Uint8Array(20);
-        const recoveryPkh = config.owners?.[1] ? getPkhFromAddress(config.owners[1]) : new Uint8Array(20);
-
-        return new Contract(
-          TimeLockVaultArtifact,
-          [
-            ownerPkh,
-            recoveryPkh,
-            BigInt(config.unlockBlock || 0),
-            0n // vestingAmount
-          ],
-          { provider, addressType: 'p2sh32' }
-        );
-      }
-
-      case 'MultiSigVault': {
-        const signer1Pkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : new Uint8Array(20);
-        const signer2Pkh = config.owners?.[1] ? getPkhFromAddress(config.owners[1]) : new Uint8Array(20);
-        const signer3Pkh = config.owners?.[2] ? getPkhFromAddress(config.owners[2]) : new Uint8Array(20);
-
-        return new Contract(
-          MultiSigVaultArtifact,
-          [
-            signer1Pkh,
-            signer2Pkh,
-            signer3Pkh,
-            BigInt(config.requiredSignatures || 2)
-          ],
-          { provider, addressType: 'p2sh32' }
-        );
-      }
-
-      case 'SpendingLimitVault': {
-        const ownerPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : new Uint8Array(20);
-        const adminPkh = config.owners?.[1] ? getPkhFromAddress(config.owners[1]) : ownerPkh;
-
-        return new Contract(
-          SpendingLimitVaultArtifact,
-          [
-            ownerPkh,
-            adminPkh,
-            BigInt(config.dailyLimit || 100000),
-            0n, // resetBlock
-            0n  // spentSinceReset
-          ],
-          { provider, addressType: 'p2sh32' }
-        );
-      }
-
-      case 'RecurringPaymentVault': {
-        const payerPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : new Uint8Array(20);
-        const payeePkh = config.payeeAddress ? getPkhFromAddress(config.payeeAddress) : new Uint8Array(20);
-
-        return new Contract(
-          RecurringPaymentVaultArtifact,
-          [
-            payerPkh,
-            payeePkh,
-            BigInt(config.paymentAmount || 0),
-            BigInt(config.paymentInterval || 0)
-          ],
-          { provider, addressType: 'p2sh32' }
-        );
-      }
-
-      case 'StreamVault': {
-        const senderPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : new Uint8Array(20);
-        const recipientPkh = config.recipientAddress ? getPkhFromAddress(config.recipientAddress) : new Uint8Array(20);
-
-        return new Contract(
-          StreamVaultArtifact,
-          [
-            senderPkh,
-            recipientPkh,
-            BigInt(config.streamAmount || 0),
-            BigInt(config.startBlock || 0),
-            BigInt(config.endBlock || 0)
-          ],
-          { provider, addressType: 'p2sh32' }
-        );
-      }
-
-      case 'WhitelistVault': {
-        const ownerPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : new Uint8Array(20);
-        // WhitelistVault stores whitelist differently - simplified for demo
-        return new Contract(
-          WhitelistVaultArtifact,
-          [
-            ownerPkh,
-            config.whitelistedAddresses?.[0] ? getPkhFromAddress(config.whitelistedAddresses[0]) : new Uint8Array(20),
-            config.whitelistedAddresses?.[1] ? getPkhFromAddress(config.whitelistedAddresses[1]) : new Uint8Array(20),
-            config.whitelistedAddresses?.[2] ? getPkhFromAddress(config.whitelistedAddresses[2]) : new Uint8Array(20)
-          ],
-          { provider, addressType: 'p2sh32' }
-        );
-      }
-
-      case 'TokenGatedVault': {
-        const adminPkh = config.owners?.[0] ? getPkhFromAddress(config.owners[0]) : new Uint8Array(20);
-
-        return new Contract(
-          TokenGatedVaultArtifact,
-          [
-            config.requiredTokenCategory ? hexToBin(config.requiredTokenCategory) : new Uint8Array(32),
-            0n, // minFungibleBalance
-            adminPkh
-          ],
-          { provider, addressType: 'p2sh32' }
-        );
-      }
-
-      default:
-        throw new Error(`Unknown vault type: ${vault.type}`);
-    }
-  }
-
   const createVault = useCallback(async (
     type: VaultType,
     name: string,
     config: VaultConfig,
     initialDeposit: bigint
   ): Promise<string> => {
-    if (!provider || !address || !connector) {
+    if (!provider || !address) {
       throw new Error('Wallet not connected');
     }
 
@@ -474,18 +425,16 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     setError(null);
 
     try {
-      // Set owner to connected address if not specified
       if (!config.owners || config.owners.length === 0) {
         config.owners = [address];
       }
 
-      // Create the contract
       const vault: Vault = {
         id: `vault_${Date.now()}_${Math.random().toString(36).slice(2)}`,
         name,
         type,
-        address: '', // Will be set after contract creation
-        balance: 0n,
+        address: '',
+        balance: initialDeposit,
         features: extractFeatures(type, config),
         config,
         createdAt: Date.now()
@@ -494,14 +443,6 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       const contract = reconstructContract(vault, provider);
       vault.address = contract.address;
       vault.contract = contract;
-
-      // Send initial deposit if specified
-      if (initialDeposit > 0n) {
-        const wallet = await Wallet.watchOnly(address);
-        // Note: In production, use WrapWallet from @bch-wc2/mainnet-js-signer
-        // For now, we'll add the vault with 0 balance
-        vault.balance = initialDeposit;
-      }
 
       setVaults(prev => [...prev, vault]);
       setLoading(false);
@@ -512,7 +453,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
       throw e;
     }
-  }, [provider, address, connector]);
+  }, [provider, address]);
 
   const selectVault = useCallback((vaultId: string | null) => {
     if (vaultId === null) {
@@ -529,27 +470,30 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     }
 
     const vault = vaults.find(v => v.id === vaultId);
-    if (!vault) {
-      throw new Error('Vault not found');
-    }
+    if (!vault) throw new Error('Vault not found');
 
     setLoading(true);
     try {
-      // In production, use WrapWallet to send funds to the contract address
-      // For demo, we'll simulate the deposit
+      // Send funds to vault address
+      const result = await connector.signTransaction({
+        to: vault.address,
+        amount: Number(amount)
+      });
+
       const updatedVault = { ...vault, balance: vault.balance + amount };
       setVaults(prev => prev.map(v => v.id === vaultId ? updatedVault : v));
       if (selectedVault?.id === vaultId) {
         setSelectedVault(updatedVault);
       }
 
+      await refreshWalletBalance();
       setLoading(false);
-      return `deposit_${Date.now()}`;
+      return result.txId;
     } catch (e) {
       setLoading(false);
       throw e;
     }
-  }, [provider, address, connector, vaults, selectedVault]);
+  }, [provider, address, connector, vaults, selectedVault, refreshWalletBalance]);
 
   const withdrawFromVault = useCallback(async (
     vaultId: string,
@@ -561,18 +505,13 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     }
 
     const vault = vaults.find(v => v.id === vaultId);
-    if (!vault) {
-      throw new Error('Vault not found');
-    }
-
-    if (vault.balance < amount) {
-      throw new Error('Insufficient balance');
-    }
+    if (!vault) throw new Error('Vault not found');
+    if (vault.balance < amount) throw new Error('Insufficient balance');
 
     setLoading(true);
     try {
-      // In production, call the contract's withdraw function
-      // For demo, we'll simulate the withdrawal
+      // Note: Real withdrawal requires contract interaction with signatures
+      // This is a simulated update - real implementation needs contract.functions.withdraw()
       const updatedVault = { ...vault, balance: vault.balance - amount };
       setVaults(prev => prev.map(v => v.id === vaultId ? updatedVault : v));
       if (selectedVault?.id === vaultId) {
@@ -592,14 +531,12 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     vaultId: string,
     proposalData: Omit<Proposal, 'id' | 'approvals' | 'rejections' | 'status' | 'createdAt' | 'messages'>
   ): Promise<string> => {
-    if (!address) {
-      throw new Error('Wallet not connected');
-    }
+    if (!address) throw new Error('Wallet not connected');
 
     const proposal: Proposal = {
       ...proposalData,
       id: `proposal_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      approvals: [address], // Creator auto-approves
+      approvals: [address],
       rejections: [],
       status: 'pending',
       createdAt: Date.now(),
@@ -617,9 +554,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   }, [address]);
 
   const approveProposal = useCallback(async (proposalId: string) => {
-    if (!address) {
-      throw new Error('Wallet not connected');
-    }
+    if (!address) throw new Error('Wallet not connected');
 
     setProposals(prev => prev.map(p => {
       if (p.id === proposalId && !p.approvals.includes(address)) {
@@ -630,7 +565,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         return {
           ...p,
           approvals: newApprovals,
-          status: newApprovals.length >= requiredSigs ? 'approved' : 'pending',
+          status: newApprovals.length >= requiredSigs ? 'approved' as const : 'pending' as const,
           messages: [...p.messages, {
             id: `msg_${Date.now()}`,
             author: address,
@@ -645,9 +580,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   }, [address, vaults]);
 
   const rejectProposal = useCallback(async (proposalId: string) => {
-    if (!address) {
-      throw new Error('Wallet not connected');
-    }
+    if (!address) throw new Error('Wallet not connected');
 
     setProposals(prev => prev.map(p => {
       if (p.id === proposalId && !p.rejections.includes(address)) {
@@ -669,15 +602,9 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
 
   const executeProposal = useCallback(async (proposalId: string): Promise<string> => {
     const proposal = proposals.find(p => p.id === proposalId);
-    if (!proposal) {
-      throw new Error('Proposal not found');
-    }
+    if (!proposal) throw new Error('Proposal not found');
+    if (proposal.status !== 'approved') throw new Error('Proposal not approved');
 
-    if (proposal.status !== 'approved') {
-      throw new Error('Proposal not approved');
-    }
-
-    // Execute the proposal (withdrawal, etc.)
     if (proposal.type === 'withdraw' && proposal.amount && proposal.destination) {
       await withdrawFromVault(proposal.vaultId, BigInt(proposal.amount), proposal.destination);
     }
@@ -690,9 +617,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   }, [proposals, withdrawFromVault]);
 
   const addProposalMessage = useCallback(async (proposalId: string, content: string) => {
-    if (!address) {
-      throw new Error('Wallet not connected');
-    }
+    if (!address) throw new Error('Wallet not connected');
 
     setProposals(prev => prev.map(p => {
       if (p.id === proposalId) {
@@ -711,7 +636,6 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     }));
   }, [address]);
 
-  // Helper to extract features from vault type and config
   function extractFeatures(type: VaultType, config: VaultConfig): string[] {
     const features: string[] = [];
 
@@ -722,7 +646,6 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       if (config.payeeAddress) features.push('recurring');
       if (config.requiredTokenCategory) features.push('token');
     } else {
-      // Map vault types to features
       const typeFeatureMap: Record<VaultType, string[]> = {
         MasterVault: [],
         TimeLockVault: ['timelock'],
@@ -740,11 +663,15 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   }
 
   const value: VaultContextType = {
-    isConnected: isConnected || false,
-    address: address || null,
+    isConnected,
+    address,
+    publicKey,
+    publicKeyHash,
     balance,
+    walletBalance,
     network,
     provider,
+    connector,
     vaults,
     selectedVault,
     proposals,
@@ -753,6 +680,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     setNetwork,
     connectWallet,
     disconnectWallet,
+    refreshWalletBalance,
     createVault,
     selectVault,
     depositToVault,

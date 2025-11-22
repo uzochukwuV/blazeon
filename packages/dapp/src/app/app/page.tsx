@@ -196,7 +196,7 @@ export default function AppPage() {
                 <button onClick={disconnectWallet} className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-[#1f1f1f]">Disconnect</button>
               </Dropdown>
             ) : (
-              <button onClick={connectWallet} disabled={loading} className="w-full py-2.5 rounded-xl bg-white text-black text-sm font-medium disabled:opacity-50">
+              <button onClick={() => connectWallet()} disabled={loading} className="w-full py-2.5 rounded-xl bg-white text-black text-sm font-medium disabled:opacity-50">
                 {loading ? "Connecting..." : sidebarOpen ? "Connect Wallet" : "→"}
               </button>
             )}
