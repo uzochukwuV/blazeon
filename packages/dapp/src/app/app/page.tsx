@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 
 // Feature definitions
@@ -46,7 +46,6 @@ interface Proposal {
   proposer: string;
   approvals: string[];
   status: "pending" | "approved" | "executed" | "rejected";
-  createdAt: number;
   messages: Message[];
 }
 
@@ -66,412 +65,407 @@ const MOCK_VAULTS: Vault[] = [
 ];
 
 const MOCK_PROPOSALS: Proposal[] = [
-  {
-    id: "p1", title: "Marketing Budget Q1", description: "Allocate funds for Q1 marketing campaign.", amount: "2.0 BCH",
-    recipient: "bitcoincash:qz...mkt", proposer: "alice.bch", approvals: ["alice.bch"], status: "pending", createdAt: Date.now() - 86400000,
-    messages: [
-      { id: "m1", sender: "alice.bch", content: "I think we should prioritize community events.", timestamp: Date.now() - 80000000, type: "comment" },
-      { id: "m2", sender: "bob.bch", content: "Agreed. 60% to events.", timestamp: Date.now() - 70000000, type: "comment" },
-      { id: "m3", sender: "alice.bch", content: "", timestamp: Date.now() - 60000000, type: "approval" },
-    ],
-  },
-  {
-    id: "p2", title: "Developer Grant", description: "Grant for protocol development.", amount: "5.0 BCH",
-    recipient: "bitcoincash:qz...dev", proposer: "bob.bch", approvals: ["bob.bch", "charlie.bch"], status: "approved", createdAt: Date.now() - 172800000,
-    messages: [
-      { id: "m4", sender: "bob.bch", content: "Funds 3 months of dev work.", timestamp: Date.now() - 170000000, type: "comment" },
-      { id: "m5", sender: "charlie.bch", content: "", timestamp: Date.now() - 160000000, type: "approval" },
-      { id: "m6", sender: "bob.bch", content: "", timestamp: Date.now() - 150000000, type: "approval" },
-    ],
-  },
+  { id: "p1", title: "Marketing Budget Q1", description: "Allocate funds for Q1 marketing.", amount: "2.0 BCH", recipient: "bitcoincash:qz...mkt", proposer: "alice.bch", approvals: ["alice.bch"], status: "pending", messages: [{ id: "m1", sender: "alice.bch", content: "Prioritize community events.", timestamp: Date.now() - 80000000, type: "comment" }, { id: "m2", sender: "bob.bch", content: "Agreed.", timestamp: Date.now() - 70000000, type: "comment" }] },
+  { id: "p2", title: "Developer Grant", description: "Grant for protocol development.", amount: "5.0 BCH", recipient: "bitcoincash:qz...dev", proposer: "bob.bch", approvals: ["bob.bch", "charlie.bch"], status: "approved", messages: [] },
 ];
 
-export default function AppPage() {
-  const [connected, setConnected] = useState(false);
-  const [view, setView] = useState<"dashboard" | "create" | "vault">("dashboard");
-  const [selectedVault, setSelectedVault] = useState<Vault | null>(null);
-  const [selectedFeatures, setSelectedFeatures] = useState<string[]>(["multisig", "timelock"]);
-
-  const walletAddress = "bitcoincash:qz...7k9";
-  const walletBalance = "12.50 BCH";
-
+// Modal Component
+function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
+  if (!open) return null;
   return (
-    <div className="min-h-screen bg-[#0a0a0a]">
-      {/* Header */}
-      <header className="border-b border-[#1f1f1f]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <Link href="/" className="text-lg font-semibold text-white">FluxVault</Link>
-            <nav className="hidden md:flex items-center">
-              <button onClick={() => { setView("dashboard"); setSelectedVault(null); }} className={`px-3 py-1.5 text-sm ${view === "dashboard" ? "text-white" : "text-[#808080] hover:text-white"}`}>Dashboard</button>
-              <button onClick={() => { setView("create"); setSelectedVault(null); }} className={`px-3 py-1.5 text-sm ${view === "create" ? "text-white" : "text-[#808080] hover:text-white"}`}>Create</button>
-            </nav>
-          </div>
-          {connected ? (
-            <button onClick={() => setConnected(false)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] text-sm">
-              <span className="w-2 h-2 rounded-full bg-[#22c55e]" />
-              <span className="text-white">{walletAddress}</span>
-            </button>
-          ) : (
-            <button onClick={() => setConnected(true)} className="px-4 py-1.5 rounded-lg bg-white text-black text-sm font-medium">Connect</button>
-          )}
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-lg mx-4 bg-[#111111] border border-[#2a2a2a] rounded-2xl shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+        <div className="flex items-center justify-between p-4 border-b border-[#1f1f1f]">
+          <h3 className="text-lg font-medium text-white">{title}</h3>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-[#1f1f1f] text-[#808080] hover:text-white transition-colors">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
         </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-        {view === "dashboard" && !selectedVault && (
-          <DashboardView
-            vaults={MOCK_VAULTS}
-            connected={connected}
-            onConnect={() => setConnected(true)}
-            onVaultClick={(v) => { setSelectedVault(v); setView("vault"); }}
-            onCreateClick={() => setView("create")}
-          />
-        )}
-        {view === "create" && (
-          <CreateVaultView
-            selectedFeatures={selectedFeatures}
-            onFeaturesChange={setSelectedFeatures}
-            connected={connected}
-            onConnect={() => setConnected(true)}
-          />
-        )}
-        {view === "vault" && selectedVault && (
-          <VaultDetailView
-            vault={selectedVault}
-            proposals={MOCK_PROPOSALS}
-            onBack={() => { setSelectedVault(null); setView("dashboard"); }}
-          />
-        )}
-      </main>
+        <div className="p-4">{children}</div>
+      </div>
     </div>
   );
 }
 
-function DashboardView({ vaults, connected, onConnect, onVaultClick, onCreateClick }: {
-  vaults: Vault[];
-  connected: boolean;
-  onConnect: () => void;
-  onVaultClick: (v: Vault) => void;
-  onCreateClick: () => void;
-}) {
+// Dropdown Component
+function Dropdown({ trigger, children, align = "left" }: { trigger: React.ReactNode; children: React.ReactNode; align?: "left" | "right" }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative">
+      <div onClick={() => setOpen(!open)}>{trigger}</div>
+      {open && (
+        <div className={`absolute mt-1 z-50 min-w-[180px] py-1 bg-[#141414] border border-[#2a2a2a] rounded-xl shadow-xl animate-in fade-in slide-in-from-top-2 duration-150 ${align === "right" ? "right-0" : "left-0"}`}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Slider Component
+function Slider({ value, onChange, min = 0, max = 100, label, suffix = "" }: { value: number; onChange: (v: number) => void; min?: number; max?: number; label: string; suffix?: string }) {
+  const pct = ((value - min) / (max - min)) * 100;
+  return (
+    <div>
+      <div className="flex justify-between mb-2">
+        <label className="text-xs text-[#808080]">{label}</label>
+        <span className="text-xs text-white">{value.toLocaleString()}{suffix}</span>
+      </div>
+      <div className="relative h-2 bg-[#1f1f1f] rounded-full">
+        <div className="absolute h-full bg-white rounded-full" style={{ width: `${pct}%` }} />
+        <input type="range" min={min} max={max} value={value} onChange={(e) => onChange(Number(e.target.value))} className="absolute inset-0 w-full opacity-0 cursor-pointer" />
+      </div>
+    </div>
+  );
+}
+
+export default function AppPage() {
+  const [connected, setConnected] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [view, setView] = useState<"dashboard" | "create" | "vault" | "settings">("dashboard");
+  const [selectedVault, setSelectedVault] = useState<Vault | null>(null);
+  const [depositModal, setDepositModal] = useState(false);
+  const [withdrawModal, setWithdrawModal] = useState(false);
+  const [proposalModal, setProposalModal] = useState(false);
+
+  const walletAddress = "bitcoincash:qz...7k9";
+
+  return (
+    <div className="min-h-screen bg-[#0a0a0a] flex">
+      {/* Sidebar */}
+      <aside className={`fixed lg:relative inset-y-0 left-0 z-40 w-64 bg-[#0d0d0d] border-r border-[#1f1f1f] transition-transform duration-300 ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0 lg:w-20"}`}>
+        <div className="flex flex-col h-full">
+          {/* Logo */}
+          <div className="h-14 flex items-center justify-between px-4 border-b border-[#1f1f1f]">
+            <Link href="/" className={`text-lg font-semibold text-white ${!sidebarOpen && "lg:hidden"}`}>FluxVault</Link>
+            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-1.5 rounded-lg hover:bg-[#1f1f1f] text-[#808080] hidden lg:block">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={sidebarOpen ? "M11 19l-7-7 7-7m8 14l-7-7 7-7" : "M13 5l7 7-7 7M5 5l7 7-7 7"} /></svg>
+            </button>
+          </div>
+
+          {/* Nav Items */}
+          <nav className="flex-1 p-3 space-y-1">
+            <NavItem icon="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" label="Dashboard" active={view === "dashboard"} collapsed={!sidebarOpen} onClick={() => { setView("dashboard"); setSelectedVault(null); }} />
+            <NavItem icon="M12 6v6m0 0v6m0-6h6m-6 0H6" label="Create Vault" active={view === "create"} collapsed={!sidebarOpen} onClick={() => { setView("create"); setSelectedVault(null); }} />
+            <NavItem icon="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" label="Settings" active={view === "settings"} collapsed={!sidebarOpen} onClick={() => setView("settings")} />
+          </nav>
+
+          {/* User */}
+          <div className="p-3 border-t border-[#1f1f1f]">
+            {connected ? (
+              <Dropdown
+                align="left"
+                trigger={
+                  <button className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-[#1f1f1f] transition-colors">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center">
+                      <span className="text-xs font-medium text-white">U</span>
+                    </div>
+                    {sidebarOpen && (
+                      <div className="flex-1 text-left">
+                        <div className="text-sm text-white truncate">{walletAddress}</div>
+                        <div className="text-xs text-[#606060]">12.50 BCH</div>
+                      </div>
+                    )}
+                  </button>
+                }
+              >
+                <button className="w-full px-3 py-2 text-left text-sm text-[#a0a0a0] hover:bg-[#1f1f1f] hover:text-white">Copy Address</button>
+                <button onClick={() => setConnected(false)} className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-[#1f1f1f]">Disconnect</button>
+              </Dropdown>
+            ) : (
+              <button onClick={() => setConnected(true)} className="w-full py-2.5 rounded-xl bg-white text-black text-sm font-medium">
+                {sidebarOpen ? "Connect Wallet" : "→"}
+              </button>
+            )}
+          </div>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <main className="flex-1 min-h-screen">
+        {/* Top Bar */}
+        <header className="h-14 border-b border-[#1f1f1f] flex items-center justify-between px-6">
+          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-1.5 rounded-lg hover:bg-[#1f1f1f] text-[#808080] lg:hidden">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+          </button>
+          <div className="flex items-center gap-2">
+            <Dropdown
+              align="right"
+              trigger={
+                <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] text-sm text-white hover:border-[#3a3a3a] transition-colors">
+                  <span className="w-2 h-2 rounded-full bg-[#22c55e]" />
+                  Chipnet
+                  <svg className="w-4 h-4 text-[#606060]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                </button>
+              }
+            >
+              <button className="w-full px-3 py-2 text-left text-sm text-white flex items-center gap-2 bg-[#1f1f1f]">
+                <span className="w-2 h-2 rounded-full bg-[#22c55e]" /> Chipnet
+              </button>
+              <button className="w-full px-3 py-2 text-left text-sm text-[#606060] flex items-center gap-2 hover:bg-[#1f1f1f] hover:text-white" disabled>
+                <span className="w-2 h-2 rounded-full bg-[#606060]" /> Mainnet (soon)
+              </button>
+            </Dropdown>
+          </div>
+        </header>
+
+        {/* Content */}
+        <div className="p-6">
+          {view === "dashboard" && !selectedVault && (
+            <DashboardView
+              vaults={MOCK_VAULTS}
+              connected={connected}
+              onConnect={() => setConnected(true)}
+              onVaultClick={(v) => { setSelectedVault(v); setView("vault"); }}
+              onCreateClick={() => setView("create")}
+            />
+          )}
+          {view === "create" && (
+            <CreateVaultView connected={connected} onConnect={() => setConnected(true)} />
+          )}
+          {view === "vault" && selectedVault && (
+            <VaultDetailView
+              vault={selectedVault}
+              proposals={MOCK_PROPOSALS}
+              onBack={() => { setSelectedVault(null); setView("dashboard"); }}
+              onDeposit={() => setDepositModal(true)}
+              onWithdraw={() => setWithdrawModal(true)}
+              onProposal={() => setProposalModal(true)}
+            />
+          )}
+          {view === "settings" && <SettingsView />}
+        </div>
+      </main>
+
+      {/* Modals */}
+      <Modal open={depositModal} onClose={() => setDepositModal(false)} title="Deposit to Vault">
+        <DepositForm onClose={() => setDepositModal(false)} />
+      </Modal>
+      <Modal open={withdrawModal} onClose={() => setWithdrawModal(false)} title="Withdraw from Vault">
+        <WithdrawForm onClose={() => setWithdrawModal(false)} />
+      </Modal>
+      <Modal open={proposalModal} onClose={() => setProposalModal(false)} title="Create Proposal">
+        <ProposalForm onClose={() => setProposalModal(false)} />
+      </Modal>
+    </div>
+  );
+}
+
+function NavItem({ icon, label, active, collapsed, onClick }: { icon: string; label: string; active: boolean; collapsed: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${active ? "bg-white/10 text-white" : "text-[#808080] hover:bg-[#1f1f1f] hover:text-white"}`} title={collapsed ? label : undefined}>
+      <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={icon} /></svg>
+      {!collapsed && <span className="text-sm">{label}</span>}
+    </button>
+  );
+}
+
+function DashboardView({ vaults, connected, onConnect, onVaultClick, onCreateClick }: { vaults: Vault[]; connected: boolean; onConnect: () => void; onVaultClick: (v: Vault) => void; onCreateClick: () => void }) {
   if (!connected) {
     return (
       <div className="flex flex-col items-center justify-center py-24">
-        <div className="w-14 h-14 rounded-2xl bg-[#1a1a1a] border border-[#2a2a2a] flex items-center justify-center mb-5">
-          <svg className="w-7 h-7 text-[#505050]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-          </svg>
+        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500/20 to-cyan-500/20 border border-[#2a2a2a] flex items-center justify-center mb-5">
+          <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
         </div>
-        <h2 className="text-lg font-medium text-white mb-1">Connect Wallet</h2>
-        <p className="text-sm text-[#808080] mb-5">View and manage your vaults</p>
-        <button onClick={onConnect} className="px-5 py-2 rounded-lg bg-white text-black text-sm font-medium">Connect Wallet</button>
+        <h2 className="text-xl font-medium text-white mb-2">Welcome to FluxVault</h2>
+        <p className="text-sm text-[#808080] mb-6 text-center max-w-sm">Connect your wallet to create and manage programmable Bitcoin Cash vaults</p>
+        <button onClick={onConnect} className="px-6 py-2.5 rounded-xl bg-white text-black font-medium">Connect Wallet</button>
       </div>
     );
   }
 
-  const totalValue = "17.734 BCH";
-  const totalUSD = "$6,207.90";
-
   return (
     <div>
-      {/* Stats Row */}
-      <div className="flex items-center justify-between mb-6">
+      {/* Header */}
+      <div className="flex items-start justify-between mb-6">
         <div>
-          <div className="text-3xl font-semibold text-white">{totalValue}</div>
-          <div className="text-sm text-[#808080]">{totalUSD} total value</div>
+          <h1 className="text-2xl font-semibold text-white">Dashboard</h1>
+          <p className="text-sm text-[#808080] mt-1">Manage your programmable vaults</p>
         </div>
-        <button onClick={onCreateClick} className="px-4 py-2 rounded-lg bg-white text-black text-sm font-medium">+ New Vault</button>
+        <button onClick={onCreateClick} className="px-4 py-2 rounded-xl bg-white text-black text-sm font-medium flex items-center gap-2">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+          New Vault
+        </button>
       </div>
 
-      {/* Vault Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {vaults.map((vault) => (
-          <VaultCard key={vault.id} vault={vault} onClick={() => onVaultClick(vault)} />
-        ))}
+      {/* Stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <StatCard label="Total Value" value="17.734 BCH" subvalue="$6,207.90" />
+        <StatCard label="Active Vaults" value="4" subvalue="3 active, 1 locked" />
+        <StatCard label="Pending Proposals" value="1" subvalue="Awaiting approval" />
+      </div>
+
+      {/* Vault List */}
+      <div className="bg-[#111111] border border-[#1f1f1f] rounded-2xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-[#1f1f1f] flex items-center justify-between">
+          <span className="text-sm font-medium text-white">Your Vaults</span>
+          <Dropdown
+            align="right"
+            trigger={
+              <button className="flex items-center gap-1 text-xs text-[#808080] hover:text-white">
+                Sort: Recent
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+              </button>
+            }
+          >
+            <button className="w-full px-3 py-2 text-left text-sm text-white bg-[#1f1f1f]">Recent</button>
+            <button className="w-full px-3 py-2 text-left text-sm text-[#a0a0a0] hover:bg-[#1f1f1f] hover:text-white">Balance: High to Low</button>
+            <button className="w-full px-3 py-2 text-left text-sm text-[#a0a0a0] hover:bg-[#1f1f1f] hover:text-white">Balance: Low to High</button>
+            <button className="w-full px-3 py-2 text-left text-sm text-[#a0a0a0] hover:bg-[#1f1f1f] hover:text-white">Name</button>
+          </Dropdown>
+        </div>
+        <div className="divide-y divide-[#1f1f1f]">
+          {vaults.map((v) => (
+            <VaultRow key={v.id} vault={v} onClick={() => onVaultClick(v)} />
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-function VaultCard({ vault, onClick }: { vault: Vault; onClick: () => void }) {
-  const activeFeatures = FEATURES.filter(f => vault.features.includes(f.id));
-
+function StatCard({ label, value, subvalue }: { label: string; value: string; subvalue: string }) {
   return (
-    <div onClick={onClick} className="p-4 rounded-xl bg-[#111111] border border-[#1f1f1f] hover:border-[#2a2a2a] transition-all cursor-pointer group">
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${activeFeatures[0]?.color || '#333'}22, ${activeFeatures[1]?.color || activeFeatures[0]?.color || '#333'}22)` }}>
-            <span className="text-lg font-medium text-white">{vault.name.charAt(0)}</span>
-          </div>
-          <div>
-            <div className="text-white font-medium">{vault.name}</div>
-            <div className="flex items-center gap-1 mt-0.5">
-              {activeFeatures.slice(0, 3).map(f => (
-                <div key={f.id} className="w-1.5 h-1.5 rounded-full" style={{ background: f.color }} title={f.name} />
-              ))}
-              {activeFeatures.length > 3 && <span className="text-[10px] text-[#606060]">+{activeFeatures.length - 3}</span>}
-            </div>
-          </div>
-        </div>
-        <div className="text-right">
-          <div className="text-white font-medium">{vault.balance}</div>
-          <div className="text-xs text-[#606060]">{vault.balanceUSD}</div>
-        </div>
-      </div>
+    <div className="p-5 bg-[#111111] border border-[#1f1f1f] rounded-xl">
+      <div className="text-xs text-[#606060] mb-1">{label}</div>
+      <div className="text-2xl font-semibold text-white">{value}</div>
+      <div className="text-sm text-[#808080]">{subvalue}</div>
+    </div>
+  );
+}
 
-      {/* Feature Pills */}
-      <div className="flex flex-wrap gap-1.5">
-        {activeFeatures.map(f => (
-          <span key={f.id} className="px-2 py-0.5 rounded text-[10px] font-medium" style={{ background: `${f.color}15`, color: f.color }}>
-            {f.name}
-          </span>
-        ))}
-      </div>
-
-      {/* Dynamic Info based on features */}
-      {vault.features.includes("multisig") && vault.signers && (
-        <div className="mt-3 pt-3 border-t border-[#1f1f1f] flex items-center gap-2">
-          <div className="flex -space-x-2">
-            {vault.signers.slice(0, 3).map((s, i) => (
-              <div key={i} className="w-6 h-6 rounded-full bg-[#1a1a1a] border-2 border-[#111111] flex items-center justify-center">
-                <span className="text-[10px] text-[#808080]">{s.charAt(0).toUpperCase()}</span>
-              </div>
+function VaultRow({ vault, onClick }: { vault: Vault; onClick: () => void }) {
+  const features = FEATURES.filter(f => vault.features.includes(f.id));
+  return (
+    <div onClick={onClick} className="flex items-center justify-between px-5 py-4 hover:bg-[#0d0d0d] cursor-pointer transition-colors">
+      <div className="flex items-center gap-4">
+        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${features[0]?.color || '#333'}30, ${features[1]?.color || features[0]?.color || '#333'}20)` }}>
+          <span className="text-sm font-medium text-white">{vault.name.charAt(0)}</span>
+        </div>
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-white font-medium">{vault.name}</span>
+            <span className={`w-2 h-2 rounded-full ${vault.status === "active" ? "bg-[#22c55e]" : vault.status === "locked" ? "bg-[#f59e0b]" : "bg-[#606060]"}`} />
+          </div>
+          <div className="flex items-center gap-1 mt-1">
+            {features.slice(0, 3).map(f => (
+              <span key={f.id} className="px-1.5 py-0.5 rounded text-[9px] font-medium" style={{ background: `${f.color}20`, color: f.color }}>{f.name}</span>
             ))}
           </div>
-          <span className="text-xs text-[#606060]">{vault.requiredSigs}-of-{vault.signers.length} signatures</span>
         </div>
-      )}
-      {vault.features.includes("timelock") && vault.unlockBlock && !vault.features.includes("multisig") && (
-        <div className="mt-3 pt-3 border-t border-[#1f1f1f] flex items-center gap-2">
-          <svg className="w-4 h-4 text-[#3b82f6]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span className="text-xs text-[#606060]">Unlocks at block {vault.unlockBlock.toLocaleString()}</span>
-        </div>
-      )}
+      </div>
+      <div className="text-right">
+        <div className="text-white font-medium">{vault.balance}</div>
+        <div className="text-xs text-[#606060]">{vault.balanceUSD}</div>
+      </div>
     </div>
   );
 }
 
-function CreateVaultView({ selectedFeatures, onFeaturesChange, connected, onConnect }: {
-  selectedFeatures: string[];
-  onFeaturesChange: (f: string[]) => void;
-  connected: boolean;
-  onConnect: () => void;
-}) {
+function CreateVaultView({ connected, onConnect }: { connected: boolean; onConnect: () => void }) {
+  const [selectedFeatures, setSelectedFeatures] = useState<string[]>(["multisig"]);
+  const [lockDuration, setLockDuration] = useState(4320);
+  const [dailyLimit, setDailyLimit] = useState(1000000);
+  const [requiredSigs, setRequiredSigs] = useState(2);
+
   const toggleFeature = (id: string) => {
-    if (selectedFeatures.includes(id)) {
-      onFeaturesChange(selectedFeatures.filter(f => f !== id));
-    } else {
-      onFeaturesChange([...selectedFeatures, id]);
-    }
+    setSelectedFeatures(prev => prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]);
   };
 
   const activeFeatures = FEATURES.filter(f => selectedFeatures.includes(f.id));
-  const gradientColors = activeFeatures.length > 0
-    ? activeFeatures.map(f => f.color).slice(0, 3)
-    : ['#333'];
 
   return (
-    <div className="max-w-3xl mx-auto">
-      {/* Dynamic Preview Header */}
-      <div className="mb-8 p-6 rounded-2xl relative overflow-hidden" style={{
-        background: `linear-gradient(135deg, ${gradientColors.map((c, i) => `${c}${i === 0 ? '20' : '10'}`).join(', ')})`
-      }}>
-        <div className="relative z-10">
-          <h1 className="text-2xl font-semibold text-white mb-1">Create Vault</h1>
-          <p className="text-sm text-[#a0a0a0]">
-            {selectedFeatures.length === 0
-              ? "Select features to customize your vault"
-              : `${selectedFeatures.length} feature${selectedFeatures.length > 1 ? 's' : ''} selected`}
-          </p>
-          {activeFeatures.length > 0 && (
-            <div className="flex flex-wrap gap-2 mt-4">
-              {activeFeatures.map(f => (
-                <span key={f.id} className="px-3 py-1 rounded-full text-xs font-medium border" style={{ borderColor: `${f.color}40`, color: f.color, background: `${f.color}10` }}>
-                  {f.name}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+    <div className="max-w-2xl">
+      <h1 className="text-2xl font-semibold text-white mb-1">Create Vault</h1>
+      <p className="text-sm text-[#808080] mb-6">Configure your programmable vault</p>
 
-      {/* Feature Selection Grid */}
+      {/* Feature Selection */}
       <div className="mb-6">
-        <label className="text-sm text-[#808080] mb-3 block">Select Features</label>
+        <label className="text-sm text-white mb-3 block">Select Features</label>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          {FEATURES.map(feature => {
-            const isSelected = selectedFeatures.includes(feature.id);
+          {FEATURES.map(f => {
+            const selected = selectedFeatures.includes(f.id);
             return (
-              <button
-                key={feature.id}
-                onClick={() => toggleFeature(feature.id)}
-                className={`p-3 rounded-xl border text-left transition-all ${
-                  isSelected
-                    ? 'border-[#404040] bg-[#1a1a1a]'
-                    : 'border-[#1f1f1f] bg-[#111111] hover:border-[#2a2a2a]'
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ background: isSelected ? `${feature.color}20` : '#1f1f1f' }}>
-                    <svg className="w-3.5 h-3.5" style={{ color: isSelected ? feature.color : '#606060' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={feature.icon} />
-                    </svg>
-                  </div>
-                  {isSelected && (
-                    <svg className="w-4 h-4 ml-auto" style={{ color: feature.color }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  )}
+              <button key={f.id} onClick={() => toggleFeature(f.id)} className={`p-3 rounded-xl border text-left transition-all ${selected ? "border-white/20 bg-white/5" : "border-[#1f1f1f] bg-[#111111] hover:border-[#2a2a2a]"}`}>
+                <div className="w-8 h-8 rounded-lg mb-2 flex items-center justify-center" style={{ background: selected ? `${f.color}20` : "#1f1f1f" }}>
+                  <svg className="w-4 h-4" style={{ color: selected ? f.color : "#606060" }} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={f.icon} /></svg>
                 </div>
-                <div className="text-xs font-medium" style={{ color: isSelected ? feature.color : '#a0a0a0' }}>{feature.name}</div>
+                <div className="text-xs font-medium" style={{ color: selected ? f.color : "#a0a0a0" }}>{f.name}</div>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Dynamic Configuration */}
-      <div className="space-y-4 mb-6">
-        <div className="p-4 rounded-xl bg-[#111111] border border-[#1f1f1f]">
-          <label className="text-sm text-[#808080] mb-3 block">Basic Configuration</label>
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs text-[#606060] mb-1 block">Vault Name</label>
-              <input type="text" placeholder="My Vault" className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-            </div>
-            <div>
-              <label className="text-xs text-[#606060] mb-1 block">Initial Deposit (BCH)</label>
-              <input type="text" placeholder="0.0" className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-            </div>
+      {/* Basic Config */}
+      <div className="p-5 bg-[#111111] border border-[#1f1f1f] rounded-xl mb-4">
+        <h3 className="text-sm text-white mb-4">Basic Configuration</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="text-xs text-[#606060] mb-1.5 block">Vault Name</label>
+            <input type="text" placeholder="My Vault" className="w-full px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
+          </div>
+          <div>
+            <label className="text-xs text-[#606060] mb-1.5 block">Initial Deposit (BCH)</label>
+            <input type="text" placeholder="0.0" className="w-full px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
           </div>
         </div>
-
-        {/* Feature-specific configs */}
-        {selectedFeatures.includes("multisig") && (
-          <FeatureConfig feature={FEATURES.find(f => f.id === "multisig")!}>
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs text-[#606060] mb-1 block">Required Signatures</label>
-                <input type="number" placeholder="2" min="1" max="8" className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-              </div>
-              <div>
-                <label className="text-xs text-[#606060] mb-1 block">Signer Public Keys</label>
-                <textarea placeholder="One per line" rows={3} className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none resize-none" />
-              </div>
-            </div>
-          </FeatureConfig>
-        )}
-
-        {selectedFeatures.includes("timelock") && (
-          <FeatureConfig feature={FEATURES.find(f => f.id === "timelock")!}>
-            <div>
-              <label className="text-xs text-[#606060] mb-1 block">Lock Until Block</label>
-              <input type="number" placeholder="850000" className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-              <div className="text-xs text-[#606060] mt-1">Current block: ~848,000</div>
-            </div>
-          </FeatureConfig>
-        )}
-
-        {selectedFeatures.includes("spending") && (
-          <FeatureConfig feature={FEATURES.find(f => f.id === "spending")!}>
-            <div>
-              <label className="text-xs text-[#606060] mb-1 block">Daily Limit (sats)</label>
-              <input type="number" placeholder="1000000" className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-            </div>
-          </FeatureConfig>
-        )}
-
-        {selectedFeatures.includes("whitelist") && (
-          <FeatureConfig feature={FEATURES.find(f => f.id === "whitelist")!}>
-            <div>
-              <label className="text-xs text-[#606060] mb-1 block">Allowed Recipients</label>
-              <textarea placeholder="One address per line" rows={3} className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none resize-none" />
-            </div>
-          </FeatureConfig>
-        )}
-
-        {selectedFeatures.includes("stream") && (
-          <FeatureConfig feature={FEATURES.find(f => f.id === "stream")!}>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-[#606060] mb-1 block">Start Block</label>
-                <input type="number" placeholder="848000" className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-              </div>
-              <div>
-                <label className="text-xs text-[#606060] mb-1 block">End Block</label>
-                <input type="number" placeholder="860000" className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-              </div>
-            </div>
-            <div className="mt-3">
-              <label className="text-xs text-[#606060] mb-1 block">Recipient</label>
-              <input type="text" placeholder="bitcoincash:..." className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-            </div>
-          </FeatureConfig>
-        )}
-
-        {selectedFeatures.includes("tokengated") && (
-          <FeatureConfig feature={FEATURES.find(f => f.id === "tokengated")!}>
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs text-[#606060] mb-1 block">Token Category (hex)</label>
-                <input type="text" placeholder="0x..." className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-              </div>
-              <div>
-                <label className="text-xs text-[#606060] mb-1 block">Min Token Amount</label>
-                <input type="number" placeholder="1" className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-              </div>
-            </div>
-          </FeatureConfig>
-        )}
-
-        {selectedFeatures.includes("recurring") && (
-          <FeatureConfig feature={FEATURES.find(f => f.id === "recurring")!}>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-[#606060] mb-1 block">Payment Amount (sats)</label>
-                <input type="number" placeholder="100000" className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-              </div>
-              <div>
-                <label className="text-xs text-[#606060] mb-1 block">Interval (blocks)</label>
-                <input type="number" placeholder="4320" className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-              </div>
-            </div>
-            <div className="mt-3">
-              <label className="text-xs text-[#606060] mb-1 block">Recipient</label>
-              <input type="text" placeholder="bitcoincash:..." className="w-full px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-            </div>
-          </FeatureConfig>
-        )}
       </div>
 
-      {/* Deploy Button */}
-      <div className="p-4 rounded-xl bg-[#111111] border border-[#1f1f1f]">
+      {/* Feature Configs with Sliders */}
+      {selectedFeatures.includes("multisig") && (
+        <FeatureConfigBox feature={FEATURES.find(f => f.id === "multisig")!}>
+          <div className="space-y-4">
+            <Slider value={requiredSigs} onChange={setRequiredSigs} min={1} max={8} label="Required Signatures" />
+            <div>
+              <label className="text-xs text-[#606060] mb-1.5 block">Signer Public Keys</label>
+              <textarea placeholder="One per line" rows={3} className="w-full px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none resize-none" />
+            </div>
+          </div>
+        </FeatureConfigBox>
+      )}
+
+      {selectedFeatures.includes("timelock") && (
+        <FeatureConfigBox feature={FEATURES.find(f => f.id === "timelock")!}>
+          <Slider value={lockDuration} onChange={setLockDuration} min={144} max={52560} label="Lock Duration (blocks)" suffix=" blocks" />
+          <p className="text-xs text-[#606060] mt-2">≈ {Math.round(lockDuration / 144)} days at 144 blocks/day</p>
+        </FeatureConfigBox>
+      )}
+
+      {selectedFeatures.includes("spending") && (
+        <FeatureConfigBox feature={FEATURES.find(f => f.id === "spending")!}>
+          <Slider value={dailyLimit} onChange={setDailyLimit} min={100000} max={10000000} label="Daily Limit (sats)" suffix=" sats" />
+          <p className="text-xs text-[#606060] mt-2">≈ {(dailyLimit / 100000000).toFixed(4)} BCH per day</p>
+        </FeatureConfigBox>
+      )}
+
+      {/* Deploy */}
+      <div className="mt-6">
         {connected ? (
-          <button disabled={selectedFeatures.length === 0} className="w-full py-3 rounded-lg bg-white text-black font-medium disabled:opacity-50 disabled:cursor-not-allowed">
-            Deploy Vault
-          </button>
+          <button disabled={selectedFeatures.length === 0} className="w-full py-3 rounded-xl bg-white text-black font-medium disabled:opacity-50">Deploy Vault</button>
         ) : (
-          <button onClick={onConnect} className="w-full py-3 rounded-lg bg-white text-black font-medium">
-            Connect Wallet to Deploy
-          </button>
+          <button onClick={onConnect} className="w-full py-3 rounded-xl bg-white text-black font-medium">Connect Wallet</button>
         )}
-        <p className="text-xs text-[#606060] mt-2 text-center">Network fees apply</p>
       </div>
     </div>
   );
 }
 
-function FeatureConfig({ feature, children }: { feature: Feature; children: React.ReactNode }) {
+function FeatureConfigBox({ feature, children }: { feature: Feature; children: React.ReactNode }) {
   return (
-    <div className="p-4 rounded-xl border" style={{ background: `${feature.color}05`, borderColor: `${feature.color}20` }}>
-      <div className="flex items-center gap-2 mb-3">
-        <div className="w-5 h-5 rounded flex items-center justify-center" style={{ background: `${feature.color}20` }}>
-          <svg className="w-3 h-3" style={{ color: feature.color }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={feature.icon} />
-          </svg>
+    <div className="p-5 rounded-xl border mb-4" style={{ background: `${feature.color}05`, borderColor: `${feature.color}20` }}>
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ background: `${feature.color}20` }}>
+          <svg className="w-3.5 h-3.5" style={{ color: feature.color }} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={feature.icon} /></svg>
         </div>
         <span className="text-sm font-medium" style={{ color: feature.color }}>{feature.name}</span>
       </div>
@@ -480,199 +474,182 @@ function FeatureConfig({ feature, children }: { feature: Feature; children: Reac
   );
 }
 
-function VaultDetailView({ vault, proposals, onBack }: { vault: Vault; proposals: Proposal[]; onBack: () => void }) {
+function VaultDetailView({ vault, proposals, onBack, onDeposit, onWithdraw, onProposal }: { vault: Vault; proposals: Proposal[]; onBack: () => void; onDeposit: () => void; onWithdraw: () => void; onProposal: () => void }) {
   const [tab, setTab] = useState<"overview" | "proposals" | "activity">("overview");
-  const [selectedProposal, setSelectedProposal] = useState<Proposal | null>(null);
-  const activeFeatures = FEATURES.filter(f => vault.features.includes(f.id));
+  const features = FEATURES.filter(f => vault.features.includes(f.id));
   const hasProposals = vault.features.includes("multisig");
-
-  if (selectedProposal) {
-    return <ProposalView proposal={selectedProposal} vault={vault} onBack={() => setSelectedProposal(null)} />;
-  }
 
   return (
     <div>
-      <button onClick={onBack} className="flex items-center gap-1 text-sm text-[#808080] hover:text-white mb-4">
+      <button onClick={onBack} className="flex items-center gap-1 text-sm text-[#808080] hover:text-white mb-4 transition-colors">
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-        Back
+        Back to Dashboard
       </button>
 
-      {/* Vault Header with gradient based on features */}
-      <div className="p-5 rounded-2xl mb-4 relative overflow-hidden" style={{
-        background: `linear-gradient(135deg, ${activeFeatures.map((f, i) => `${f.color}${i === 0 ? '15' : '08'}`).join(', ')})`
-      }}>
-        <div className="flex items-start justify-between relative z-10">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-xl flex items-center justify-center" style={{ background: `${activeFeatures[0]?.color || '#333'}20` }}>
-              <span className="text-2xl font-semibold text-white">{vault.name.charAt(0)}</span>
-            </div>
-            <div>
-              <h1 className="text-xl font-semibold text-white">{vault.name}</h1>
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                {activeFeatures.map(f => (
-                  <span key={f.id} className="px-2 py-0.5 rounded text-[10px] font-medium" style={{ background: `${f.color}20`, color: f.color }}>{f.name}</span>
-                ))}
-              </div>
+      {/* Header */}
+      <div className="flex items-start justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${features[0]?.color || '#333'}30, ${features[1]?.color || features[0]?.color || '#333'}20)` }}>
+            <span className="text-xl font-semibold text-white">{vault.name.charAt(0)}</span>
+          </div>
+          <div>
+            <h1 className="text-xl font-semibold text-white">{vault.name}</h1>
+            <div className="flex gap-1.5 mt-1">
+              {features.map(f => (
+                <span key={f.id} className="px-2 py-0.5 rounded text-[10px] font-medium" style={{ background: `${f.color}20`, color: f.color }}>{f.name}</span>
+              ))}
             </div>
           </div>
-          <div className="text-right">
-            <div className="text-2xl font-semibold text-white">{vault.balance}</div>
-            <div className="text-sm text-[#808080]">{vault.balanceUSD}</div>
-          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-2xl font-semibold text-white">{vault.balance}</div>
+          <div className="text-sm text-[#808080]">{vault.balanceUSD}</div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-4 p-1 rounded-lg bg-[#111111] border border-[#1f1f1f] w-fit">
-        <button onClick={() => setTab("overview")} className={`px-4 py-1.5 rounded-md text-sm ${tab === "overview" ? "bg-[#1a1a1a] text-white" : "text-[#808080]"}`}>Overview</button>
-        {hasProposals && <button onClick={() => setTab("proposals")} className={`px-4 py-1.5 rounded-md text-sm ${tab === "proposals" ? "bg-[#1a1a1a] text-white" : "text-[#808080]"}`}>Proposals</button>}
-        <button onClick={() => setTab("activity")} className={`px-4 py-1.5 rounded-md text-sm ${tab === "activity" ? "bg-[#1a1a1a] text-white" : "text-[#808080]"}`}>Activity</button>
+      <div className="flex gap-1 mb-6 p-1 bg-[#111111] border border-[#1f1f1f] rounded-xl w-fit">
+        <button onClick={() => setTab("overview")} className={`px-4 py-2 rounded-lg text-sm transition-colors ${tab === "overview" ? "bg-white text-black" : "text-[#808080] hover:text-white"}`}>Overview</button>
+        {hasProposals && <button onClick={() => setTab("proposals")} className={`px-4 py-2 rounded-lg text-sm transition-colors ${tab === "proposals" ? "bg-white text-black" : "text-[#808080] hover:text-white"}`}>Proposals</button>}
+        <button onClick={() => setTab("activity")} className={`px-4 py-2 rounded-lg text-sm transition-colors ${tab === "activity" ? "bg-white text-black" : "text-[#808080] hover:text-white"}`}>Activity</button>
       </div>
 
       {tab === "overview" && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Actions */}
-          <div className="p-4 rounded-xl bg-[#111111] border border-[#1f1f1f]">
-            <h3 className="text-sm text-white mb-3">Actions</h3>
+          <div className="p-5 bg-[#111111] border border-[#1f1f1f] rounded-xl">
+            <h3 className="text-sm text-white mb-4">Quick Actions</h3>
             <div className="space-y-2">
-              <button className="w-full py-2 rounded-lg bg-white text-black text-sm font-medium">Deposit</button>
-              <button className="w-full py-2 rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] text-white text-sm">Withdraw</button>
-              {hasProposals && <button onClick={() => setTab("proposals")} className="w-full py-2 rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] text-white text-sm">Create Proposal</button>}
+              <button onClick={onDeposit} className="w-full py-2.5 rounded-xl bg-white text-black text-sm font-medium">Deposit</button>
+              <button onClick={onWithdraw} className="w-full py-2.5 rounded-xl bg-[#1f1f1f] text-white text-sm border border-[#2a2a2a] hover:border-[#3a3a3a]">Withdraw</button>
+              {hasProposals && <button onClick={onProposal} className="w-full py-2.5 rounded-xl bg-[#1f1f1f] text-white text-sm border border-[#2a2a2a] hover:border-[#3a3a3a]">Create Proposal</button>}
             </div>
           </div>
-
-          {/* Feature-specific details */}
-          <div className="lg:col-span-2 space-y-3">
-            {vault.features.includes("multisig") && vault.signers && (
-              <div className="p-4 rounded-xl border" style={{ background: '#8b5cf608', borderColor: '#8b5cf620' }}>
-                <h3 className="text-sm font-medium text-[#8b5cf6] mb-3">Multi-Signature</h3>
-                <div className="flex items-center gap-3">
-                  <div className="flex -space-x-2">
-                    {vault.signers.map((s, i) => (
-                      <div key={i} className="w-8 h-8 rounded-full bg-[#1a1a1a] border-2 border-[#111111] flex items-center justify-center">
-                        <span className="text-xs text-[#808080]">{s.charAt(0).toUpperCase()}</span>
-                      </div>
-                    ))}
+          <div className="lg:col-span-2 space-y-4">
+            {features.map(f => (
+              <div key={f.id} className="p-4 rounded-xl border" style={{ background: `${f.color}05`, borderColor: `${f.color}20` }}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-5 h-5 rounded flex items-center justify-center" style={{ background: `${f.color}20` }}>
+                    <svg className="w-3 h-3" style={{ color: f.color }} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={f.icon} /></svg>
                   </div>
-                  <div className="text-sm text-[#a0a0a0]">{vault.requiredSigs} of {vault.signers.length} required</div>
+                  <span className="text-sm font-medium" style={{ color: f.color }}>{f.name}</span>
                 </div>
+                {f.id === "multisig" && vault.signers && <div className="text-sm text-[#a0a0a0]">{vault.requiredSigs} of {vault.signers.length} signatures required</div>}
+                {f.id === "timelock" && vault.unlockBlock && <div className="text-sm text-[#a0a0a0]">Unlocks at block {vault.unlockBlock.toLocaleString()}</div>}
+                {f.id === "spending" && vault.dailyLimit && <div className="text-sm text-[#a0a0a0]">Daily limit: {vault.dailyLimit}</div>}
               </div>
-            )}
-            {vault.features.includes("timelock") && vault.unlockBlock && (
-              <div className="p-4 rounded-xl border" style={{ background: '#3b82f608', borderColor: '#3b82f620' }}>
-                <h3 className="text-sm font-medium text-[#3b82f6] mb-2">Time Lock</h3>
-                <div className="text-sm text-[#a0a0a0]">Unlocks at block {vault.unlockBlock.toLocaleString()}</div>
-              </div>
-            )}
-            {vault.features.includes("spending") && vault.dailyLimit && (
-              <div className="p-4 rounded-xl border" style={{ background: '#f59e0b08', borderColor: '#f59e0b20' }}>
-                <h3 className="text-sm font-medium text-[#f59e0b] mb-2">Spending Limit</h3>
-                <div className="text-sm text-[#a0a0a0]">Daily limit: {vault.dailyLimit}</div>
-              </div>
-            )}
+            ))}
           </div>
         </div>
       )}
 
       {tab === "proposals" && hasProposals && (
         <div className="space-y-3">
-          <div className="flex justify-between items-center">
-            <h3 className="text-sm text-white">Proposals</h3>
-            <button className="px-3 py-1.5 rounded-lg bg-white text-black text-sm font-medium">+ New</button>
+          <div className="flex justify-between">
+            <span className="text-sm text-white">Active Proposals</span>
+            <button onClick={onProposal} className="px-3 py-1.5 rounded-lg bg-white text-black text-xs font-medium">+ New</button>
           </div>
           {proposals.map(p => (
-            <div key={p.id} onClick={() => setSelectedProposal(p)} className="p-4 rounded-xl bg-[#111111] border border-[#1f1f1f] hover:border-[#2a2a2a] cursor-pointer">
+            <div key={p.id} className="p-4 bg-[#111111] border border-[#1f1f1f] rounded-xl hover:border-[#2a2a2a] cursor-pointer transition-colors">
               <div className="flex justify-between mb-1">
                 <span className="text-white font-medium">{p.title}</span>
-                <span className={`px-2 py-0.5 text-xs rounded ${p.status === "pending" ? "bg-[#f59e0b20] text-[#f59e0b]" : p.status === "approved" ? "bg-[#22c55e20] text-[#22c55e]" : "bg-[#60606020] text-[#606060]"}`}>{p.status}</span>
+                <span className={`px-2 py-0.5 text-xs rounded ${p.status === "pending" ? "bg-[#f59e0b20] text-[#f59e0b]" : "bg-[#22c55e20] text-[#22c55e]"}`}>{p.status}</span>
               </div>
-              <div className="text-sm text-[#606060]">{p.amount} · {p.approvals.length}/{vault.requiredSigs} approved · {p.messages.length} comments</div>
+              <div className="text-sm text-[#606060]">{p.amount} · {p.approvals.length}/{vault.requiredSigs} approved</div>
             </div>
           ))}
         </div>
       )}
 
       {tab === "activity" && (
-        <div className="p-6 rounded-xl bg-[#111111] border border-[#1f1f1f] text-center text-sm text-[#606060]">
-          No recent activity
-        </div>
+        <div className="p-8 bg-[#111111] border border-[#1f1f1f] rounded-xl text-center text-sm text-[#606060]">No recent activity</div>
       )}
     </div>
   );
 }
 
-function ProposalView({ proposal, vault, onBack }: { proposal: Proposal; vault: Vault; onBack: () => void }) {
-  const [msg, setMsg] = useState("");
-  const format = (ts: number) => new Date(ts).toLocaleDateString() + " " + new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
+function SettingsView() {
   return (
-    <div>
-      <button onClick={onBack} className="flex items-center gap-1 text-sm text-[#808080] hover:text-white mb-4">
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-        Back to Proposals
-      </button>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="space-y-4">
-          <div className="p-4 rounded-xl bg-[#111111] border border-[#1f1f1f]">
-            <div className="flex justify-between mb-3">
-              <h3 className="text-white font-medium">{proposal.title}</h3>
-              <span className={`px-2 py-0.5 text-xs rounded ${proposal.status === "pending" ? "bg-[#f59e0b20] text-[#f59e0b]" : "bg-[#22c55e20] text-[#22c55e]"}`}>{proposal.status}</span>
-            </div>
-            <p className="text-sm text-[#808080] mb-4">{proposal.description}</p>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-[#606060]">Amount</span><span className="text-white">{proposal.amount}</span></div>
-              <div className="flex justify-between"><span className="text-[#606060]">Recipient</span><span className="text-white font-mono text-xs">{proposal.recipient}</span></div>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-xl bg-[#111111] border border-[#1f1f1f]">
-            <h4 className="text-sm text-white mb-3">Approvals ({proposal.approvals.length}/{vault.requiredSigs})</h4>
-            {vault.signers?.map(s => (
-              <div key={s} className="flex justify-between py-1.5 text-sm">
-                <span className="text-[#a0a0a0]">{s}</span>
-                <span className={proposal.approvals.includes(s) ? "text-[#22c55e]" : "text-[#606060]"}>{proposal.approvals.includes(s) ? "Approved" : "Pending"}</span>
-              </div>
-            ))}
-            <div className="mt-4 pt-4 border-t border-[#1f1f1f] space-y-2">
-              <button className="w-full py-2 rounded-lg bg-[#22c55e] text-black text-sm font-medium">Approve</button>
-              <button className="w-full py-2 rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] text-white text-sm">Reject</button>
-            </div>
-          </div>
+    <div className="max-w-2xl">
+      <h1 className="text-2xl font-semibold text-white mb-1">Settings</h1>
+      <p className="text-sm text-[#808080] mb-6">Configure your FluxVault preferences</p>
+      <div className="space-y-4">
+        <div className="p-5 bg-[#111111] border border-[#1f1f1f] rounded-xl">
+          <h3 className="text-sm text-white mb-4">Network</h3>
+          <Dropdown
+            trigger={
+              <button className="w-full flex items-center justify-between px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm hover:border-[#2a2a2a]">
+                <span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-[#22c55e]" />Chipnet</span>
+                <svg className="w-4 h-4 text-[#606060]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+              </button>
+            }
+          >
+            <button className="w-full px-3 py-2 text-left text-sm text-white bg-[#1f1f1f]">Chipnet</button>
+            <button className="w-full px-3 py-2 text-left text-sm text-[#606060]" disabled>Mainnet (coming soon)</button>
+          </Dropdown>
         </div>
+      </div>
+    </div>
+  );
+}
 
-        <div className="lg:col-span-2 rounded-xl bg-[#111111] border border-[#1f1f1f] flex flex-col h-[500px]">
-          <div className="px-4 py-3 border-b border-[#1f1f1f]"><span className="text-sm text-white">Discussion</span></div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {proposal.messages.map(m => (
-              <div key={m.id} className="flex gap-3">
-                <div className="w-7 h-7 rounded-full bg-[#1a1a1a] flex items-center justify-center flex-shrink-0">
-                  <span className="text-[10px] text-[#808080]">{m.sender.charAt(0).toUpperCase()}</span>
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-sm text-white">{m.sender}</span>
-                    <span className="text-[10px] text-[#606060]">{format(m.timestamp)}</span>
-                  </div>
-                  {m.type === "approval" ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#22c55e20] text-[#22c55e] text-xs">
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                      Approved
-                    </span>
-                  ) : m.type === "rejection" ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#ef444420] text-[#ef4444] text-xs">Rejected</span>
-                  ) : (
-                    <p className="text-sm text-[#a0a0a0]">{m.content}</p>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="p-3 border-t border-[#1f1f1f] flex gap-2">
-            <input value={msg} onChange={e => setMsg(e.target.value)} placeholder="Add comment..." className="flex-1 px-3 py-2 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
-            <button className="px-4 py-2 rounded-lg bg-white text-black text-sm font-medium">Send</button>
-          </div>
+function DepositForm({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="text-xs text-[#606060] mb-1.5 block">Amount (BCH)</label>
+        <input type="text" placeholder="0.0" className="w-full px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" autoFocus />
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-[#1f1f1f] text-white text-sm border border-[#2a2a2a]">Cancel</button>
+        <button className="flex-1 py-2.5 rounded-xl bg-white text-black text-sm font-medium">Deposit</button>
+      </div>
+    </div>
+  );
+}
+
+function WithdrawForm({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="text-xs text-[#606060] mb-1.5 block">Amount (BCH)</label>
+        <input type="text" placeholder="0.0" className="w-full px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" autoFocus />
+      </div>
+      <div>
+        <label className="text-xs text-[#606060] mb-1.5 block">Recipient Address</label>
+        <input type="text" placeholder="bitcoincash:..." className="w-full px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-[#1f1f1f] text-white text-sm border border-[#2a2a2a]">Cancel</button>
+        <button className="flex-1 py-2.5 rounded-xl bg-white text-black text-sm font-medium">Withdraw</button>
+      </div>
+    </div>
+  );
+}
+
+function ProposalForm({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="text-xs text-[#606060] mb-1.5 block">Title</label>
+        <input type="text" placeholder="Proposal title" className="w-full px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" autoFocus />
+      </div>
+      <div>
+        <label className="text-xs text-[#606060] mb-1.5 block">Description</label>
+        <textarea placeholder="Describe your proposal..." rows={3} className="w-full px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none resize-none" />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-[#606060] mb-1.5 block">Amount (BCH)</label>
+          <input type="text" placeholder="0.0" className="w-full px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
         </div>
+        <div>
+          <label className="text-xs text-[#606060] mb-1.5 block">Recipient</label>
+          <input type="text" placeholder="bitcoincash:..." className="w-full px-4 py-2.5 rounded-xl bg-[#0a0a0a] border border-[#1f1f1f] text-white text-sm focus:border-[#2a2a2a] outline-none" />
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-[#1f1f1f] text-white text-sm border border-[#2a2a2a]">Cancel</button>
+        <button className="flex-1 py-2.5 rounded-xl bg-white text-black text-sm font-medium">Create Proposal</button>
       </div>
     </div>
   );
