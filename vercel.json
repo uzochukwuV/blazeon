@@ -1,6 +1,0 @@
-{
-  "buildCommand": "yarn workspace @dapp-starter/contracts build && yarn workspace @dapp-starter/dapp build",
-  "outputDirectory": "packages/dapp/.next",
-  "installCommand": "yarn install",
-  "framework": "nextjs"
-}

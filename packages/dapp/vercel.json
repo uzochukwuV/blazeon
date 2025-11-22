@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "cd ../.. && yarn install",
+  "buildCommand": "cd ../.. && yarn workspace @dapp-starter/contracts build && cd packages/dapp && next build --webpack",
+  "framework": "nextjs"
+}
