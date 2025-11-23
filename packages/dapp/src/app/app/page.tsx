@@ -3,6 +3,9 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useVault, VaultType, Vault, Proposal, VaultConfig, NetworkType } from "@/contexts/VaultContext";
+import { useToast } from "@/components/Toast";
+import { VaultCardSkeleton, StatCardSkeleton } from "@/components/ui/Skeleton";
+import { ProgressRing } from "@/components/ui/ProgressRing";
 
 // Feature definitions
 interface Feature {
@@ -130,16 +133,26 @@ export default function AppPage() {
     addProposalMessage
   } = useVault();
 
+  const toast = useToast();
+
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [view, setView] = useState<"dashboard" | "create" | "vault" | "settings">("dashboard");
   const [depositModal, setDepositModal] = useState(false);
   const [withdrawModal, setWithdrawModal] = useState(false);
   const [proposalModal, setProposalModal] = useState(false);
 
+  // Show error toast when error changes
+  useEffect(() => {
+    if (error) {
+      toast.error('Error', error);
+    }
+  }, [error]);
+
   // Refresh vaults on mount and when connected
   useEffect(() => {
     if (isConnected) {
       refreshVaults();
+      toast.success('Wallet Connected', `Connected to ${network}`);
     }
   }, [isConnected]);
 
@@ -445,6 +458,7 @@ function CreateVaultView({ isConnected, address, loading, onConnect, onCreate }:
   const [signerKeys, setSignerKeys] = useState('');
   const [initialDeposit, setInitialDeposit] = useState('');
   const [creating, setCreating] = useState(false);
+  const toast = useToast();
 
   const toggleFeature = (id: string) => {
     setSelectedFeatures(prev => prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]);
@@ -452,11 +466,12 @@ function CreateVaultView({ isConnected, address, loading, onConnect, onCreate }:
 
   const handleCreate = async () => {
     if (!vaultName.trim()) {
-      alert('Please enter a vault name');
+      toast.warning('Missing Name', 'Please enter a vault name');
       return;
     }
 
     setCreating(true);
+    toast.info('Creating Vault', 'Deploying your vault contract...');
     try {
       const config: VaultConfig = {
         owners: address ? [address] : [],
@@ -482,9 +497,9 @@ function CreateVaultView({ isConnected, address, loading, onConnect, onCreate }:
       setSelectedFeatures(['multisig']);
       setInitialDeposit('');
       setSignerKeys('');
-      alert('Vault created successfully!');
+      toast.success('Vault Created', `"${vaultName}" is ready to use`);
     } catch (e) {
-      alert('Failed to create vault: ' + (e instanceof Error ? e.message : 'Unknown error'));
+      toast.error('Failed to Create Vault', e instanceof Error ? e.message : 'Unknown error');
     }
     setCreating(false);
   };
@@ -799,19 +814,21 @@ function DepositForm({ vaultId, onDeposit, onClose, loading }: {
 }) {
   const [amount, setAmount] = useState('');
   const [depositing, setDepositing] = useState(false);
+  const toast = useToast();
 
   const handleDeposit = async () => {
     if (!amount || parseFloat(amount) <= 0) {
-      alert('Please enter a valid amount');
+      toast.warning('Invalid Amount', 'Please enter a valid amount');
       return;
     }
     setDepositing(true);
     try {
       const sats = BigInt(Math.floor(parseFloat(amount) * 100000000));
       await onDeposit(vaultId, sats);
+      toast.success('Deposit Successful', `Deposited ${amount} BCH to vault`);
       onClose();
     } catch (e) {
-      alert('Deposit failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+      toast.error('Deposit Failed', e instanceof Error ? e.message : 'Unknown error');
     }
     setDepositing(false);
   };
@@ -842,23 +859,25 @@ function WithdrawForm({ vaultId, maxAmount, onWithdraw, onClose, loading }: {
   const [amount, setAmount] = useState('');
   const [recipient, setRecipient] = useState('');
   const [withdrawing, setWithdrawing] = useState(false);
+  const toast = useToast();
 
   const handleWithdraw = async () => {
     if (!amount || parseFloat(amount) <= 0) {
-      alert('Please enter a valid amount');
+      toast.warning('Invalid Amount', 'Please enter a valid amount');
       return;
     }
     if (!recipient.trim()) {
-      alert('Please enter a recipient address');
+      toast.warning('Missing Recipient', 'Please enter a recipient address');
       return;
     }
     setWithdrawing(true);
     try {
       const sats = BigInt(Math.floor(parseFloat(amount) * 100000000));
       await onWithdraw(vaultId, sats, recipient);
+      toast.success('Withdrawal Successful', `Withdrew ${amount} BCH from vault`);
       onClose();
     } catch (e) {
-      alert('Withdrawal failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+      toast.error('Withdrawal Failed', e instanceof Error ? e.message : 'Unknown error');
     }
     setWithdrawing(false);
   };
@@ -896,10 +915,11 @@ function ProposalForm({ vaultId, address, onCreate, onClose, loading }: {
   const [amount, setAmount] = useState('');
   const [recipient, setRecipient] = useState('');
   const [creating, setCreating] = useState(false);
+  const toast = useToast();
 
   const handleCreate = async () => {
     if (!title.trim()) {
-      alert('Please enter a title');
+      toast.warning('Missing Title', 'Please enter a proposal title');
       return;
     }
     setCreating(true);
@@ -914,9 +934,10 @@ function ProposalForm({ vaultId, address, onCreate, onClose, loading }: {
         destination: recipient,
         createdBy: address
       });
+      toast.success('Proposal Created', `"${title}" is now pending approval`);
       onClose();
     } catch (e) {
-      alert('Failed to create proposal: ' + (e instanceof Error ? e.message : 'Unknown error'));
+      toast.error('Failed to Create Proposal', e instanceof Error ? e.message : 'Unknown error');
     }
     setCreating(false);
   };
