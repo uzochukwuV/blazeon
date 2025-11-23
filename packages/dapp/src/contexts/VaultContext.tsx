@@ -474,13 +474,49 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
 
     setLoading(true);
     try {
-      // Send funds to vault address
-      const result = await connector.signTransaction({
-        to: vault.address,
-        amount: Number(amount)
-      });
+      // Get the wallet instance for real contract interaction
+      const wallet = connector.getWallet();
+      if (!wallet) throw new Error('Wallet not available');
 
-      const updatedVault = { ...vault, balance: vault.balance + amount };
+      // For initial deposit or if vault has no UTXOs, send directly
+      const contract = reconstructContract(vault, provider);
+      const utxos = await contract.getUtxos();
+
+      let txId: string;
+      if (utxos.length === 0) {
+        // Send directly to contract address for initial deposit
+        const response = await wallet.send([{
+          cashaddr: vault.address,
+          value: Number(amount),
+          unit: 'sat'
+        }]);
+        txId = typeof response === 'string' ? response : (response as { txId: string }).txId;
+      } else {
+        // Use contract's deposit function if available
+        try {
+          const tx = await contract.functions
+            .deposit()
+            .from(utxos[0])
+            .withoutChange()
+            .to(vault.address, utxos[0].satoshis + amount)
+            .send();
+          txId = tx.txid;
+        } catch {
+          // Fallback to direct send if deposit function fails
+          const response = await wallet.send([{
+            cashaddr: vault.address,
+            value: Number(amount),
+            unit: 'sat'
+          }]);
+          txId = typeof response === 'string' ? response : (response as { txId: string }).txId;
+        }
+      }
+
+      // Refresh vault balance from chain
+      const newUtxos = await contract.getUtxos();
+      const newBalance = newUtxos.reduce((sum: bigint, utxo: { satoshis: bigint }) => sum + utxo.satoshis, 0n);
+
+      const updatedVault = { ...vault, balance: newBalance };
       setVaults(prev => prev.map(v => v.id === vaultId ? updatedVault : v));
       if (selectedVault?.id === vaultId) {
         setSelectedVault(updatedVault);
@@ -488,7 +524,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
 
       await refreshWalletBalance();
       setLoading(false);
-      return result.txId;
+      return txId;
     } catch (e) {
       setLoading(false);
       throw e;
@@ -500,31 +536,138 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     amount: bigint,
     destination: string
   ): Promise<string> => {
-    if (!provider || !address) {
+    if (!provider || !address || !connector) {
       throw new Error('Wallet not connected');
     }
 
     const vault = vaults.find(v => v.id === vaultId);
     if (!vault) throw new Error('Vault not found');
-    if (vault.balance < amount) throw new Error('Insufficient balance');
+
+    const wallet = connector.getWallet();
+    if (!wallet) throw new Error('Wallet not available');
+
+    const contract = reconstructContract(vault, provider);
+    const utxos = await contract.getUtxos();
+    if (utxos.length === 0) throw new Error('No funds in vault');
+
+    const balance = utxos.reduce((sum: bigint, utxo: { satoshis: bigint }) => sum + utxo.satoshis, 0n);
+    if (balance < amount) throw new Error('Insufficient balance');
 
     setLoading(true);
     try {
-      // Note: Real withdrawal requires contract interaction with signatures
-      // This is a simulated update - real implementation needs contract.functions.withdraw()
-      const updatedVault = { ...vault, balance: vault.balance - amount };
+      const publicKey = wallet.publicKey;
+      if (!publicKey) throw new Error('Public key not available');
+
+      // Import SignatureTemplate dynamically to avoid import issues
+      const { SignatureTemplate } = await import('cashscript');
+      const sigTemplate = new SignatureTemplate(wallet);
+
+      let txId: string;
+      const remaining = balance - amount - 1000n;
+
+      // Use appropriate withdrawal method based on vault type
+      switch (vault.type) {
+        case 'TimeLockVault':
+          if (remaining > 546n) {
+            const tx = await contract.functions
+              .partialWithdraw(publicKey, sigTemplate, amount)
+              .withoutChange()
+              .to(vault.address, remaining)
+              .to(destination, amount - 500n)
+              .send();
+            txId = tx.txid;
+          } else {
+            const tx = await contract.functions
+              .withdraw(publicKey, sigTemplate)
+              .withoutChange()
+              .to(destination, balance - 1000n)
+              .send();
+            txId = tx.txid;
+          }
+          break;
+
+        case 'SpendingLimitVault':
+          const destBytecode = (await import('@bitauth/libauth')).cashAddressToLockingBytecode(destination);
+          if (typeof destBytecode === 'string') throw new Error('Invalid destination address');
+          const tx = await contract.functions
+            .spend(publicKey, sigTemplate, amount, destBytecode.bytecode)
+            .withoutChange()
+            .to(remaining > 546n ? vault.address : destination, remaining > 546n ? remaining : balance - 1000n)
+            .to(destination, amount - 500n)
+            .send();
+          txId = tx.txid;
+          break;
+
+        case 'WhitelistVault':
+          const recipientPkh = (await import('@bitauth/libauth')).cashAddressToLockingBytecode(destination);
+          if (typeof recipientPkh === 'string') throw new Error('Invalid destination address');
+          const whitelistTx = await contract.functions
+            .spendToWhitelisted(publicKey, sigTemplate, recipientPkh.bytecode.slice(3, 23), amount)
+            .withoutChange()
+            .to(remaining > 546n ? vault.address : destination, remaining > 546n ? remaining : balance - 1000n)
+            .to(destination, amount - 500n)
+            .send();
+          txId = whitelistTx.txid;
+          break;
+
+        case 'RecurringPaymentVault':
+          // For recurring payment, use cancel to withdraw all to payer
+          const cancelTx = await contract.functions
+            .cancel(publicKey, sigTemplate)
+            .withoutChange()
+            .to(destination, balance - 1000n)
+            .send();
+          txId = cancelTx.txid;
+          break;
+
+        case 'StreamVault':
+          // For stream vault, use claimAll for recipient
+          const streamTx = await contract.functions
+            .claimAll(publicKey, sigTemplate)
+            .withoutChange()
+            .to(destination, balance - 1000n)
+            .send();
+          txId = streamTx.txid;
+          break;
+
+        case 'TokenGatedVault':
+          // Admin withdraw for token-gated vault
+          const tokenTx = await contract.functions
+            .adminWithdraw(publicKey, sigTemplate)
+            .withoutChange()
+            .to(destination, balance - 1000n)
+            .send();
+          txId = tokenTx.txid;
+          break;
+
+        default:
+          // Generic withdraw attempt
+          const genericTx = await contract.functions
+            .withdraw(publicKey, sigTemplate)
+            .withoutChange()
+            .to(destination, balance - 1000n)
+            .send();
+          txId = genericTx.txid;
+      }
+
+      // Refresh vault balance from chain
+      const newUtxos = await contract.getUtxos();
+      const newBalance = newUtxos.reduce((sum: bigint, utxo: { satoshis: bigint }) => sum + utxo.satoshis, 0n);
+
+      const updatedVault = { ...vault, balance: newBalance };
       setVaults(prev => prev.map(v => v.id === vaultId ? updatedVault : v));
       if (selectedVault?.id === vaultId) {
         setSelectedVault(updatedVault);
       }
 
+      await refreshWalletBalance();
       setLoading(false);
-      return `withdraw_${Date.now()}`;
+      return txId;
     } catch (e) {
       setLoading(false);
       throw e;
     }
-  }, [provider, address, vaults, selectedVault]);
+  }, [provider, address, connector, vaults, selectedVault, refreshWalletBalance]);
 
   // Proposal operations
   const createProposal = useCallback(async (
