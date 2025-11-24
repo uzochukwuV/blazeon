@@ -1,12 +1,11 @@
-// TimeLockVault - Advanced time-locked vault with P2S covenant support
-// BOUNTY TARGET: P2S Covenant (10M sats)
+// TimeLockVault - Advanced time-locked vault with P2SH covenant support
 //
 // Features:
 // - Time-locked funds with configurable unlock block
-// - Partial withdrawals with covenant to preserve remaining lock
+// - Partial withdrawals with P2SH covenant to preserve remaining lock
 // - Recovery key for emergencies
 // - Lock extension capability
-// - P2S output support for flexible spending conditions
+// - Uses tx introspection for covenant enforcement
 
 pragma cashscript ^0.13.0;
 
@@ -27,7 +26,7 @@ contract TimeLockVault(
     }
 
     // Partial withdrawal with covenant - withdraw some, keep rest locked
-    // This creates a P2S-style output back to the same contract
+    // This creates a P2SH output back to the same contract
     function partialWithdraw(
         pubkey ownerPk,
         sig ownerSig,
@@ -49,7 +48,7 @@ contract TimeLockVault(
 
         // If significant amount remains, covenant to keep it locked
         if (remainingAmount > 546) {
-            // Output 0: Remaining funds stay in same contract (P2S covenant)
+            // Output 0: Remaining funds stay in same contract (P2SH covenant)
             require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
             require(tx.outputs[0].value >= remainingAmount);
 
@@ -65,7 +64,7 @@ contract TimeLockVault(
     }
 
     // Vesting withdrawal - withdraw only the vested amount
-    // Demonstrates time-based P2S covenant for gradual release
+    // Demonstrates time-based P2SH covenant for gradual release
     function vestingWithdraw(pubkey ownerPk, sig ownerSig) {
         // Verify owner identity
         require(hash160(ownerPk) == ownerPkh);
