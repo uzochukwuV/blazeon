@@ -1,6 +1,6 @@
 // SpendingLimitVault - Daily spending limits with allowance reset
 // Real-world use: Business expense accounts, allowances, budget control
-// BOUNTY TARGET: P2S Covenant + Practical DeFi
+// DEMONSTRATES: P2SH Covenants with state tracking
 
 pragma cashscript ^0.13.0;
 

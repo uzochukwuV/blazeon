@@ -1,12 +1,12 @@
-// TokenGatedVault - NFT-gated access control using Composite CashTokens
-// Demonstrates Composite CashTokens (NFT + FT together) for access control
-// BOUNTY TARGET: Composite CashTokens (100M sats)
+// TokenGatedVault - NFT-gated access control using CashTokens
+// Demonstrates CashToken introspection for access control
+// Uses tokenCategory, tokenAmount, and nftCommitment for gating
 //
 // Features:
-// - NFT required for access (proves membership)
-// - Fungible token balance required (proves stake/reputation)
+// - NFT required for access (proves membership via nftCommitment)
+// - Fungible token balance required (proves stake/reputation via tokenAmount)
 // - Tiered access based on token amounts
-// - Covenant to preserve token outputs
+// - P2SH covenant to preserve token outputs
 
 pragma cashscript ^0.13.0;
 

@@ -1,7 +1,7 @@
 // MultiSigVault - Multi-signature vault with BITWISE operations
-// Demonstrates bitwise operations for efficient multi-party authorization
-// Uses bytes for permission flags with & (AND), | (OR), ^ (XOR) operators
-// BOUNTY TARGET: Bitwise Operations (10M sats)
+// Demonstrates VM bitwise opcodes (OP_AND, OP_OR) for efficient multi-party authorization
+// Uses bytes for permission flags with & (AND), | (OR) operators
+// DEMONSTRATES: Bitwise Operations - compiles to OP_AND, OP_OR opcodes
 
 pragma cashscript ^0.13.0;
 

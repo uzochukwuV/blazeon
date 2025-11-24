@@ -2,7 +2,7 @@
 // Combines: TimeLock + Recurring + SpendingLimit + MultiSig + TokenGating
 // Real-world use: Complete treasury management solution
 //
-// BOUNTY TARGETS: Bitwise Operations + P2S Covenant + Composite CashTokens
+// DEMONSTRATES: Bitwise Operations (mask-based multi-sig) + P2SH Covenants + CashTokens
 
 pragma cashscript ^0.13.0;
 
@@ -74,7 +74,7 @@ contract MasterVault(
         int remaining = tx.inputs[0].value - amount - 500;
 
         if (remaining > 546) {
-            // P2S Covenant: remaining stays in vault
+            // P2SH Covenant: remaining stays in vault
             require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
             require(tx.outputs[0].value >= remaining);
 
@@ -150,7 +150,7 @@ contract MasterVault(
 
         int remaining = tx.inputs[0].value - recurringAmount - 500;
 
-        // P2S Covenant: vault continues
+        // P2SH Covenant: vault continues
         require(tx.outputs[0].lockingBytecode == tx.inputs[0].lockingBytecode);
         require(tx.outputs[0].value >= remaining);
 
@@ -235,7 +235,7 @@ contract MasterVault(
         require(newSpendingLimit >= 0);
         require(newUnlockBlock >= 0);
 
-        // Preserve funds (P2S covenant)
+        // Preserve funds (P2SH covenant)
         require(tx.outputs[0].value >= tx.inputs[0].value - 1000);
     }
 }
